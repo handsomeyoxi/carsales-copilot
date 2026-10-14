@@ -1,6 +1,9 @@
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
+// FieldValue、Timestamp 直接從這裡載入：在本機測試環境中 admin.firestore.FieldValue 會是 undefined
+const { FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { analyzeConversation, analyzeAfterConversation, generateQuotation } = require("./gemini");
+const { analyzeInsight, followUpAdvisor } = require("./advisor");
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -60,7 +63,7 @@ exports.analyzeAfterConversation = functions.https.onRequest(async (req, res) =>
     
     const result = await analyzeAfterConversation(conversationText, customerHistory);
 
-    const timestamp = admin.firestore.FieldValue.serverTimestamp();
+    const timestamp = FieldValue.serverTimestamp();
 
     
     const conversationRef = await db.collection("conversations").add({
@@ -105,7 +108,7 @@ exports.analyzeAfterConversation = functions.https.onRequest(async (req, res) =>
     await db.collection("followUps").add({
       customerId,
       salespersonId,
-      followUpDate: admin.firestore.Timestamp.fromDate(followUpDate),
+      followUpDate: Timestamp.fromDate(followUpDate),
       followUpScript: result.follow_up.follow_up_script,
       reason: result.follow_up.suggested_date_reason,
       isDone: false,
@@ -153,7 +156,7 @@ exports.generateQuotation = functions.https.onRequest(async (req, res) => {
       customerId,
       carId,
       quotation: result.quotation,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     });
 
     return res.status(200).json({
@@ -220,5 +223,158 @@ exports.getDashboard = functions.https.onRequest(async (req, res) => {
   } catch (error) {
     console.error("getDashboard error:", error);
     return res.status(500).json({ error: "Dashboard 資料載入失敗" });
+  }
+});
+
+
+// ===== 以下為新增：硬需求標籤、情緒價值標籤、情緒分析、回訪軍師 =====
+
+// 把這次對話的新標籤併入客戶原有的標籤
+// - 同一類別、同一內容的標籤：用新的取代舊的
+// - 只會有一個答案的類別（例如預算）：新的出現時，舊的整個換掉
+// - 其他：新舊都保留
+const SINGLE_VALUE_CATEGORIES = ["預算", "購車時間", "付款方式", "舊車換購"];
+
+function mergeTags(oldTags, newTags, textField) {
+  const incoming = Array.isArray(newTags) ? newTags.filter((t) => t && t.category && t[textField]) : [];
+  const existing = Array.isArray(oldTags) ? oldTags : [];
+  const incomingKeys = new Set(incoming.map((t) => `${t.category}|${t[textField]}`));
+  const replacedCategories = new Set(
+    incoming.map((t) => t.category).filter((c) => SINGLE_VALUE_CATEGORIES.includes(c))
+  );
+  const kept = existing.filter(
+    (t) => !incomingKeys.has(`${t.category}|${t[textField]}`) && !replacedCategories.has(t.category)
+  );
+  return [...kept, ...incoming];
+}
+
+function mergeStrings(oldList, newList) {
+  const all = [...(Array.isArray(oldList) ? oldList : []), ...(Array.isArray(newList) ? newList : [])];
+  return [...new Set(all.filter((item) => typeof item === "string" && item.trim() !== ""))];
+}
+
+// 轉成台灣時區的日期字串，例如 2026-10-08
+function toTaipeiDate(date) {
+  return date.toLocaleDateString("sv-SE", { timeZone: "Asia/Taipei" });
+}
+
+function toDateString(timestamp) {
+  return timestamp && timestamp.toDate ? toTaipeiDate(timestamp.toDate()) : null;
+}
+
+
+exports.analyzeInsight = functions.https.onRequest(async (req, res) => {
+  setCORS(res);
+  if (req.method === "OPTIONS") return res.status(204).send("");
+
+  try {
+    const { conversationText, customerId, conversationId } = req.body;
+
+    if (!conversationText) {
+      return res.status(400).json({ error: "conversationText 是必填欄位" });
+    }
+
+    const result = await analyzeInsight(conversationText);
+
+    // 有帶 conversationId 就把結果存回那筆對話紀錄
+    if (conversationId) {
+      await db.collection("conversations").doc(conversationId).set(
+        { insight: result },
+        { merge: true }
+      );
+    }
+
+    // 有帶 customerId 就把新標籤併入客戶累積的標籤，並更新最新情緒
+    if (customerId) {
+      const customerRef = db.collection("customers").doc(customerId);
+      const customerDoc = await customerRef.get();
+      const current = customerDoc.exists ? customerDoc.data() : {};
+
+      await customerRef.set(
+        {
+          hardNeeds: mergeTags(current.hardNeeds, result.hard_needs, "value"),
+          emotionalValues: mergeTags(current.emotionalValues, result.emotional_values, "label"),
+          concerns: mergeStrings(current.concerns, result.concerns),
+          latestEmotion: result.emotion || null,
+        },
+        { merge: true }
+      );
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    console.error("analyzeInsight error:", error);
+    return res.status(500).json({ error: "AI 分析失敗，請稍後再試" });
+  }
+});
+
+
+exports.followUpAdvisor = functions.https.onRequest(async (req, res) => {
+  setCORS(res);
+  if (req.method === "OPTIONS") return res.status(204).send("");
+
+  try {
+    const { customerId } = req.body;
+
+    if (!customerId) {
+      return res.status(400).json({ error: "customerId 是必填欄位" });
+    }
+
+    const [customerDoc, conversationsSnap] = await Promise.all([
+      db.collection("customers").doc(customerId).get(),
+      db.collection("conversations").where("customerId", "==", customerId).get(),
+    ]);
+
+    if (!customerDoc.exists) return res.status(404).json({ error: "找不到客戶資料" });
+    if (conversationsSnap.empty) {
+      return res.status(404).json({ error: "這位客戶還沒有對話紀錄，無法產生回訪建議" });
+    }
+
+    // 在程式裡排序（由新到舊），只取最近 5 筆，這樣不用另外建 Firestore 複合索引
+    const conversations = conversationsSnap.docs
+      .map((doc) => doc.data())
+      .sort((a, b) => {
+        const aTime = a.createdAt && a.createdAt.toMillis ? a.createdAt.toMillis() : 0;
+        const bTime = b.createdAt && b.createdAt.toMillis ? b.createdAt.toMillis() : 0;
+        return bTime - aTime;
+      })
+      .slice(0, 5);
+
+    // 只把分析結果交給 AI，不送完整逐字稿，節省免費額度
+    const history = conversations.map((c) => ({
+      date: toDateString(c.createdAt),
+      summary: c.analysis ? c.analysis.summary : null,
+      lifecycle_stage: c.analysis ? c.analysis.lifecycle_stage : null,
+      close_probability: c.analysis ? c.analysis.close_probability : null,
+      insight: c.insight || null,
+    }));
+
+    const customerData = customerDoc.data();
+    const customer = {
+      name: customerData.name || null,
+      lifecycleStage: customerData.lifecycleStage || null,
+      closeProbability: customerData.closeProbability ?? null,
+      lastContactDate: toDateString(customerData.lastContactAt),
+      hardNeeds: customerData.hardNeeds || [],
+      emotionalValues: customerData.emotionalValues || [],
+      concerns: customerData.concerns || [],
+      latestEmotion: customerData.latestEmotion || null,
+    };
+
+    const today = toTaipeiDate(new Date());
+    const result = await followUpAdvisor(customer, history, today);
+
+    await db.collection("customers").doc(customerId).set(
+      {
+        followUpAdvice: result,
+        followUpAdviceAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    console.error("followUpAdvisor error:", error);
+    return res.status(500).json({ error: "回訪建議生成失敗，請稍後再試" });
   }
 });
