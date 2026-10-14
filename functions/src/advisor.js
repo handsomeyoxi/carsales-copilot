@@ -4,8 +4,15 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// 要跟 gemini.js 裡的 MODEL 保持一致
-const MODEL = "gemini-3.8-flash";
+// 依序嘗試的模型：第一個塞車（503）、額度用完（429）或回傳格式壞掉時，自動改用下一個
+// 想換模型時，可以在 functions/.env 加一行，例如：
+// GEMINI_MODELS=gemini-3.7-flash,gemini-3.5-flash-lite
+const DEFAULT_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite"];
+const MODELS = (process.env.GEMINI_MODELS || "")
+  .split(",")
+  .map((name) => name.trim())
+  .filter(Boolean);
+const MODEL_LIST = MODELS.length > 0 ? MODELS : DEFAULT_MODELS;
 
 // 分析類任務要穩定，所以溫度調低，並要求直接回傳 JSON
 const GENERATION_CONFIG = {
@@ -18,31 +25,57 @@ function safeParseJSON(text) {
   return JSON.parse(cleaned);
 }
 
-// Gemini 暫時塞車（503）、伺服器錯誤（500）或太頻繁（429）時，等一下自動重試
-const RETRY_STATUS = [429, 500, 503];
-const RETRY_WAIT_MS = [2000, 4000]; // 第一次失敗等 2 秒，第二次失敗等 4 秒，總共最多試 3 次
+// 遇到這些狀態碼時換下一個模型：429 額度用完、500 伺服器錯誤、503 塞車
+const SWITCH_STATUS = [429, 500, 503];
+// 所有模型都失敗時，等 3 秒再從頭試一輪（最多兩輪）
+const ROUNDS = 2;
+const ROUND_WAIT_MS = 3000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function askGemini(prompt) {
-  const model = genAI.getGenerativeModel({
-    model: MODEL,
-    generationConfig: GENERATION_CONFIG,
-  });
+  let lastError;
 
-  for (let attempt = 0; ; attempt++) {
-    try {
-      const result = await model.generateContent(prompt);
-      return safeParseJSON(result.response.text());
-    } catch (error) {
-      const canRetry = RETRY_STATUS.includes(error.status) && attempt < RETRY_WAIT_MS.length;
-      if (!canRetry) throw error;
-      console.warn(`Gemini 回應 ${error.status}，${RETRY_WAIT_MS[attempt] / 1000} 秒後重試（第 ${attempt + 1} 次）`);
-      await sleep(RETRY_WAIT_MS[attempt]);
+  for (let round = 1; round <= ROUNDS; round++) {
+    for (const modelName of MODEL_LIST) {
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: GENERATION_CONFIG,
+      });
+
+      let text;
+      try {
+        const startedAt = Date.now();
+        console.log(`呼叫 Gemini：${modelName}（第 ${round} 輪）...`);
+        const result = await model.generateContent(prompt);
+        console.log(`${modelName} 回覆完成，花了 ${Math.round((Date.now() - startedAt) / 1000)} 秒`);
+        text = result.response.text();
+      } catch (error) {
+        if (!SWITCH_STATUS.includes(error.status)) throw error;
+        console.warn(`${modelName} 回應 ${error.status}，改用下一個模型`);
+        lastError = error;
+        continue;
+      }
+
+      // 模型偶爾會回傳格式壞掉的 JSON（輕量模型比較常見），這時也改用下一個模型
+      try {
+        return safeParseJSON(text);
+      } catch (error) {
+        console.warn(`${modelName} 回傳的 JSON 格式有誤（${error.message}），改用下一個模型`);
+        console.warn(`回傳內容開頭：${String(text).slice(0, 300)}`);
+        lastError = error;
+      }
+    }
+
+    if (round < ROUNDS) {
+      console.warn(`所有模型都暫時無法使用，${ROUND_WAIT_MS / 1000} 秒後再試一輪`);
+      await sleep(ROUND_WAIT_MS);
     }
   }
+
+  throw lastError;
 }
 
 // 功能一：從單次對話抓出「硬需求標籤」「情緒價值標籤」與「客戶情緒」

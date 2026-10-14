@@ -229,6 +229,9 @@ exports.getDashboard = functions.https.onRequest(async (req, res) => {
 
 // ===== 以下為新增：硬需求標籤、情緒價值標籤、情緒分析、回訪軍師 =====
 
+// AI 分析加上自動重試可能超過預設的 60 秒，這兩支 function 放寬到 120 秒
+const LONG_AI_TASK = { timeoutSeconds: 120 };
+
 // 把這次對話的新標籤併入客戶原有的標籤
 // - 同一類別、同一內容的標籤：用新的取代舊的
 // - 只會有一個答案的類別（例如預算）：新的出現時，舊的整個換掉
@@ -263,7 +266,7 @@ function toDateString(timestamp) {
 }
 
 
-exports.analyzeInsight = functions.https.onRequest(async (req, res) => {
+exports.analyzeInsight = functions.runWith(LONG_AI_TASK).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
@@ -309,7 +312,7 @@ exports.analyzeInsight = functions.https.onRequest(async (req, res) => {
 });
 
 
-exports.followUpAdvisor = functions.https.onRequest(async (req, res) => {
+exports.followUpAdvisor = functions.runWith(LONG_AI_TASK).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
