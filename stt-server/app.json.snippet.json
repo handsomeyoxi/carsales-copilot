@@ -1,0 +1,17 @@
+{
+  "_說明": "把下面 plugins 裡的 expo-audio 設定合併進你們專案的 app.json（expo.plugins），android.permissions 也一併加入",
+  "expo": {
+    "plugins": [
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "CarSales Copilot 需要使用麥克風，記錄您與客戶的對話並轉成文字。",
+          "enableBackgroundRecording": true
+        }
+      ]
+    ],
+    "android": {
+      "permissions": ["RECORD_AUDIO"]
+    }
+  }
+}
