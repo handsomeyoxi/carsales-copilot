@@ -1,4 +1,4 @@
-// 全 App 共用的狀態：客戶、待辦、錄音同意、標籤驗證、詞庫、CRM、新手引導
+// 全 App 共用的狀態：客戶、待辦、錄音同意、標籤驗證、詞庫、CRM、新手引導、AI 助理對話
 // 任何頁面都用 useCustomers() 拿資料和操作函式
 import { createContext, useContext, useState } from 'react';
 import {
@@ -51,9 +51,16 @@ export function CustomerProvider({ children }) {
   }
 
   // ---- 註冊 ----（之後換成 Firebase Auth 的 createUserWithEmailAndPassword）
-  function register({ name, email, phone, branch }) {
-    setProfile({ name, email, phone, title: `業務 · ${branch}`, dealsThisMonth: 0 });
+  // 註冊只建立帳號；姓名、品牌、展間等業務員資料在下一頁 setup-profile 填
+  function register({ email }) {
+    setProfile({ name: '', email, phone: '', brand: '', dealsThisMonth: 0 });
     setOnboarded(false); // 新帳號要看新手引導
+  }
+
+  // ---- AI 助理對話 ----
+  const [chat, setChat] = useState([]);
+  function addChatMessage(msg) {
+    setChat((prev) => [...prev, { id: 'm' + Date.now() + Math.random(), ...msg }]);
   }
 
   // ---- 客戶 ----
@@ -61,8 +68,10 @@ export function CustomerProvider({ children }) {
     const newCustomer = {
       id: 'c' + Date.now(),
       stage: '初次接觸',
+      status: 'new',
       closeProbability: 20,
       lastContactDays: 0,
+      needs: { lookingAt: [], features: [] },
       ...customer,
     };
     setCustomers((prev) => [newCustomer, ...prev]);
@@ -71,10 +80,19 @@ export function CustomerProvider({ children }) {
   function getCustomer(id) {
     return customers.find((c) => c.id === id);
   }
+  function updateCustomer(id, patch) {
+    setCustomers((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }
 
   // ---- 待辦 ----
   function toggleTodo(id) {
     setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+  }
+  // 自己新增待辦：{ task, date: 'YYYY-MM-DD', time, customerId, priority }
+  function addTodo(todo) {
+    const newTodo = { id: 'td' + Date.now(), priority: 'medium', time: '', customerId: null, done: false, ...todo };
+    setTodos((prev) => [...prev, newTodo]);
+    return newTodo;
   }
 
   // ---- 錄音同意 + 錄音工作階段 ----
@@ -162,8 +180,12 @@ export function CustomerProvider({ children }) {
         customers,
         addCustomer,
         getCustomer,
+        updateCustomer,
         todos,
         toggleTodo,
+        addTodo,
+        chat,
+        addChatMessage,
         consents,
         activeSession,
         hasConsent,

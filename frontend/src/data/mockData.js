@@ -1,9 +1,11 @@
 // 假資料：欄位設計對齊後端 API（analyzeAfterConversation / getDashboard）
 // 之後接後端時，只要把這些換成 API 回傳的資料，畫面幾乎不用改
 
+import { addDays } from '../utils/date';
+
 export const salesperson = {
   name: '張偉明',
-  title: '資深業務 · 台北旗艦展間',
+  brand: 'BMW', // 業務員代理的品牌：決定首頁幻燈片和推薦的車款
   email: 'wei.chang@carbrand.com',
   phone: '0912-345-678',
   dealsThisMonth: 2,
@@ -12,8 +14,17 @@ export const salesperson = {
 // 客戶生命週期（對應後端 lifecycle_stage.stage）
 export const STAGES = ['初次接觸', '需求確認', '報價中', '決策中', '成交'];
 
+// 客戶狀態（客戶頁的分類）
+export const STATUSES = [
+  { key: 'new', label: '新客戶', icon: '🆕', desc: '剛接觸、還在了解需求' },
+  { key: 'following', label: '追蹤中', icon: '🔄', desc: '已在比較車款、報價或試乘' },
+  { key: 'won', label: '已成交', icon: '🎉', desc: '已下訂或交車，持續維繫' },
+];
+
 // temperature：hot 熱 / warm 溫 / cold 冷
+// status：new 新客戶 / following 追蹤中 / won 已成交
 // closeProbability：AI 推估成交機率（%）
+// needs：客戶需求（來看什麼車、預算、車型、在意的配備）
 export const initialCustomers = [
   {
     id: 'c1',
@@ -21,11 +32,20 @@ export const initialCustomers = [
     phone: '0933-111-222',
     source: '展間來訪',
     temperature: 'hot',
+    status: 'following',
     note: '太太預產 · 月底前要定車',
     interestedCar: 'BMW X5',
     stage: '決策中',
     closeProbability: 78,
     lastContactDays: 7,
+    needs: {
+      lookingAt: ['BMW X5', 'Mercedes-Benz GLE'],
+      budget: '約 400 萬',
+      budgetMax: 420,
+      type: 'SUV',
+      usage: '家庭用，要放嬰兒車',
+      features: ['ADAS 主動安全', '後座空間大', '白色'],
+    },
   },
   {
     id: 'c4',
@@ -33,11 +53,20 @@ export const initialCustomers = [
     phone: '0955-888-123',
     source: 'LINE',
     temperature: 'hot',
+    status: 'following',
     note: '換車預算 120 萬 · 比較油電',
-    interestedCar: 'Toyota RAV4 Hybrid',
+    interestedCar: 'Toyota RAV4',
     stage: '報價中',
     closeProbability: 66,
     lastContactDays: 2,
+    needs: {
+      lookingAt: ['Toyota RAV4', 'Honda CR-V'],
+      budget: '120 萬內，可考慮分期',
+      budgetMax: 200,
+      type: 'SUV',
+      usage: '通勤＋週末出遊',
+      features: ['省油', '好停車'],
+    },
   },
   {
     id: 'c2',
@@ -45,11 +74,20 @@ export const initialCustomers = [
     phone: '0922-456-789',
     source: '電話詢問',
     temperature: 'warm',
-    note: '喜歡喝紅酒 · GLC 試乘',
-    interestedCar: 'Benz GLC',
+    status: 'following',
+    note: '喜歡喝紅酒 · 比較 X3 與 GLC',
+    interestedCar: 'Mercedes-Benz GLC',
     stage: '需求確認',
     closeProbability: 52,
     lastContactDays: 3,
+    needs: {
+      lookingAt: ['Mercedes-Benz GLC'],
+      budget: '尚未提及',
+      budgetMax: 300,
+      type: 'SUV',
+      usage: '常載父母出門',
+      features: ['後座舒適', '上下車方便'],
+    },
   },
   {
     id: 'c3',
@@ -57,38 +95,90 @@ export const initialCustomers = [
     phone: '0910-246-810',
     source: '展間來訪',
     temperature: 'cold',
+    status: 'new',
     note: '養貓 · 看過 Volvo XC60',
     interestedCar: 'Volvo XC60',
     stage: '初次接觸',
     closeProbability: 25,
     lastContactDays: 14,
+    needs: {
+      lookingAt: ['Volvo XC60'],
+      budget: '250 萬內',
+      budgetMax: 250,
+      type: 'SUV',
+      usage: '帶寵物出遊',
+      features: ['安全配備', '好清潔'],
+    },
+  },
+  {
+    id: 'c6',
+    name: '黃子軒',
+    phone: '0978-321-654',
+    source: '官網預約',
+    temperature: 'warm',
+    status: 'new',
+    note: '對電動車有興趣 · 預約試乘',
+    interestedCar: 'BMW i4',
+    stage: '初次接觸',
+    closeProbability: 35,
+    lastContactDays: 1,
+    needs: {
+      lookingAt: ['BMW i4', 'Tesla Model 3'],
+      budget: '300 萬內',
+      budgetMax: 300,
+      type: '電動車',
+      usage: '通勤',
+      features: ['純電', '加速感'],
+    },
+  },
+  {
+    id: 'c5',
+    name: '李承恩',
+    phone: '0920-777-888',
+    source: '舊客介紹',
+    temperature: 'hot',
+    status: 'won',
+    note: '9/30 交車 X3 · 下個月首次保養',
+    interestedCar: 'BMW X3',
+    stage: '成交',
+    closeProbability: 100,
+    lastContactDays: 10,
+    needs: {
+      lookingAt: ['BMW X3'],
+      budget: '約 270 萬',
+      budgetMax: 280,
+      type: 'SUV',
+      usage: '家庭',
+      features: ['好停車'],
+    },
   },
 ];
 
-// 智慧待辦（對應後端 todos）
+// 智慧待辦：date 是「YYYY-MM-DD」，行事曆依日期顯示
 export const initialTodos = [
-  { id: 'td1', customerId: 'c1', task: '確認白色 X5 現車與交車時間', priority: 'high', due: '今天', done: false },
-  { id: 'td2', customerId: 'c1', task: '準備嬰兒座椅 ISOFIX 安裝示範', priority: 'medium', due: '3 天內', done: false },
-  { id: 'td3', customerId: 'c4', task: '寄送 RAV4 油電版報價單', priority: 'high', due: '今天', done: false },
-  { id: 'td4', customerId: 'c2', task: '安排 GLC 週末試乘', priority: 'medium', due: '本週內', done: false },
-  { id: 'td5', customerId: 'c3', task: '傳 XC60 寵物友善配備資料', priority: 'low', due: '本週內', done: true },
+  { id: 'td1', customerId: 'c1', task: '確認白色 X5 現車與交車時間', priority: 'high', date: addDays(0), time: '10:00', done: false },
+  { id: 'td2', customerId: 'c1', task: '準備嬰兒座椅 ISOFIX 安裝示範', priority: 'medium', date: addDays(2), time: '', done: false },
+  { id: 'td3', customerId: 'c4', task: '寄送 X1 與 RAV4 比較報價單', priority: 'high', date: addDays(0), time: '15:00', done: false },
+  { id: 'td4', customerId: 'c2', task: '邀請父母一起試乘 X3', priority: 'medium', date: addDays(4), time: '', done: false },
+  { id: 'td5', customerId: 'c3', task: '傳 XC60 與 X3 寵物友善比較', priority: 'low', date: addDays(-1), time: '', done: true },
+  { id: 'td6', customerId: 'c5', task: '提醒李先生首次保養', priority: 'medium', date: addDays(9), time: '', done: false },
 ];
 
 // 自動回訪提醒（對應後端 followUps）
 export const followUps = [
-  { id: 'f1', customerId: 'c1', when: '今天', reason: '太太預產期將近，月底前是決策關鍵' },
-  { id: 'f4', customerId: 'c4', when: '明天', reason: '報價單寄出後 1 天追蹤最有效' },
-  { id: 'f2', customerId: 'c2', when: '10/9', reason: '試乘後 3 天內回訪，趁印象還深' },
+  { id: 'f1', customerId: 'c1', date: addDays(0), when: '今天', reason: '太太預產期將近，月底前是決策關鍵' },
+  { id: 'f4', customerId: 'c4', date: addDays(1), when: '明天', reason: '報價單寄出後 1 天追蹤最有效' },
+  { id: 'f2', customerId: 'c2', date: addDays(3), when: addDays(3).slice(5).replace('-', '/'), reason: '試乘後 3 天內回訪，趁印象還深' },
 ];
 
 // 互動紀錄（客戶詳情頁的時間軸）
 export const interactions = {
   c1: [
     { id: 'i1', date: '10/05', type: '展間接待', text: 'VoiceRec 錄音 12 分鐘，確認白色 X5 與 ADAS 需求' },
-    { id: 'i2', date: '09/28', type: '展間接待', text: '初次看車，比較 X5 與 GLC' },
+    { id: 'i2', date: '09/28', type: '展間接待', text: '初次看車，比較 X5 與 Benz GLE' },
   ],
   c4: [{ id: 'i3', date: '10/03', type: 'LINE', text: '詢問 RAV4 油電版價格與保固' }],
-  c2: [{ id: 'i4', date: '10/02', type: '試乘', text: 'GLC 試乘 30 分鐘，在意後座空間' }],
+  c2: [{ id: 'i4', date: '10/02', type: '試乘', text: '試乘 BMW X3 30 分鐘，也在比較 Benz GLC，在意後座空間' }],
   c3: [{ id: 'i5', date: '09/21', type: '展間接待', text: '看過 XC60，家裡有養貓' }],
 };
 
@@ -118,11 +208,11 @@ export const transcript = [
     id: 't2',
     speaker: 'customer',
     confidence: 0.92,
-    text: '對，我太太說她喜歡白色的，不過她快生了，我想在她月子前就把車定下來。預算想控制在 170 萬左右，配備要有 ADAS。',
+    text: '對，我太太說她喜歡白色的，不過她快生了，我想在她月子前就把車定下來。預算想控制在 400 萬左右，配備要有 ADAS。',
   },
   { id: 't3', speaker: 'customer', confidence: 0.71, text: '還有後面那台 G L C 的為門是電動的嗎？' },
 ];
-export const detectedKeywords = ['太太快生了', '白色偏好', '170萬預算', 'ADAS需求', '電動尾門'];
+export const detectedKeywords = ['太太快生了', '白色偏好', '400萬預算', 'ADAS需求', '電動尾門'];
 
 // AI 智慧摘要（硬需求 Agent + 情緒價值 Agent + 成交分析）
 // confidence = AI 對這個標籤的信心，低於 0.75 標成「待確認」
@@ -132,14 +222,14 @@ export const analysis = {
     duration: '12 分 40 秒',
     asrConfidence: 91,
     summary: [
-      '主要考慮 BMW X5，GLC 為備選',
+      '主要考慮 BMW X5，Benz GLE 為備選',
       '太太偏好白色，需有 ADAS 主動安全',
       '希望在太太坐月子前完成訂車',
     ],
     hard: [
-      { id: 'h1', label: '車款', value: 'BMW X5 / Benz GLC', confidence: 0.95 },
+      { id: 'h1', label: '車款', value: 'BMW X5 / Benz GLE', confidence: 0.95 },
       { id: 'h2', label: '顏色', value: '白色（太太偏好）', confidence: 0.93 },
-      { id: 'h3', label: '預算', value: '150–170 萬', confidence: 0.88 },
+      { id: 'h3', label: '預算', value: '約 400 萬', confidence: 0.88 },
       { id: 'h4', label: '配備', value: 'ADAS 主動安全系統', confidence: 0.9 },
       { id: 'h5', label: '用途', value: '家庭用、嬰兒車空間需求', confidence: 0.68 },
     ],
@@ -157,17 +247,18 @@ export const analysis = {
       percentage: 78,
       level: '高',
       positive: ['明確預算', '有時間壓力（預產期）', '已指定顏色與配備'],
-      risk: ['仍在比較 GLC', '太太尚未到店看車'],
+      risk: ['仍在比較 Benz GLE', '太太尚未到店看車'],
       suggestion: '邀請太太一起賞車，並提供月底前訂車的配件優惠',
+      why: '客戶已明確說出車款、顏色、預算和配備，而且有「太太坐月子前要定車」的時間壓力，這些都是成交前的典型信號；扣分在於還在跟 Benz GLE 比較，而且實際用車的太太還沒來看過車。',
     },
   },
   c2: {
     recordedAt: '10/02 16:05',
     duration: '8 分 12 秒',
     asrConfidence: 88,
-    summary: ['GLC 試乘滿意', '在意後座空間與乘坐舒適', '尚未談到預算'],
+    summary: ['X3 試乘反應不錯，也在比較 Benz GLC', '在意後座空間與乘坐舒適', '尚未談到預算'],
     hard: [
-      { id: 'h6', label: '車款', value: 'Benz GLC', confidence: 0.92 },
+      { id: 'h6', label: '車款', value: 'BMW X3 / Benz GLC', confidence: 0.92 },
       { id: 'h7', label: '配備', value: '後座空間、氣氛燈', confidence: 0.74 },
       { id: 'h8', label: '預算', value: '尚未提及', confidence: 0.55 },
     ],
@@ -185,7 +276,8 @@ export const analysis = {
       level: '中',
       positive: ['主動預約試乘', '對車款評價正面'],
       risk: ['預算未明', '可能同時看其他品牌'],
-      suggestion: '提供 GLC 分期試算，順勢了解預算',
+      suggestion: '邀請試乘 BMW X3，並提供分期試算，順勢了解預算',
+      why: '客戶主動預約試乘、對車款評價正面，代表有購買意願；但還沒談預算和購車時間，而且看的是 Benz，需要先讓她認識自家同級的 X3。',
     },
   },
 };
@@ -201,7 +293,7 @@ export const revisit = {
       { title: '需求確認', text: '白色 X5 的現車我幫你確認好了，嬰兒車放進去沒問題，我們去看看？' },
       { title: '時間緊迫感', text: '月底前訂車我可以幫你申請到額外的配件優惠，這週應該是最好的時機。' },
     ],
-    avoid: ['預算 150–170萬', 'ADAS 配備', '白色偏好'],
+    avoid: ['預算約 400 萬', 'ADAS 配備', '白色偏好'],
   },
   c2: {
     daysSinceLast: 3,
@@ -209,8 +301,8 @@ export const revisit = {
     summary: '試乘反應不錯，但還沒談預算。先聊生活話題，再自然帶到分期方案。',
     openers: [
       { title: '情感開場', text: '上次聊到你喜歡紅酒，最近有喝到什麼好酒嗎？' },
-      { title: '需求確認', text: '你說常載爸媽出門，GLC 後座的空間跟上下車高度你覺得 OK 嗎？' },
-      { title: '時間緊迫感', text: '這個月 GLC 有低利分期，我幫你算一下月付大概多少？' },
+      { title: '需求確認', text: '你說常載爸媽出門，X3 後座的空間跟上下車高度你覺得 OK 嗎？' },
+      { title: '時間緊迫感', text: '這個月 X3 有低利分期，我幫你算一下月付大概多少？' },
     ],
     avoid: ['試乘感想', '後座空間'],
   },

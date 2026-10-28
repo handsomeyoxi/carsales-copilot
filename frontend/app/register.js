@@ -5,11 +5,9 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import BackHeader from '../src/components/BackHeader';
-import Chip from '../src/components/Chip';
 import { useCustomers } from '../src/context/CustomerContext';
 import { colors, radius } from '../src/theme';
 
-const branches = ['台北旗艦展間', '新北展間', '桃園展間', '台中展間', '其他'];
 
 // 有標題、可顯示錯誤訊息的輸入框
 function Field({ label, error, ...inputProps }) {
@@ -28,19 +26,14 @@ function Field({ label, error, ...inputProps }) {
 
 export default function RegisterScreen() {
   const { register, termsAgreed: agreed, setTermsAgreed: setAgreed } = useCustomers();
-  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [branch, setBranch] = useState(branches[0]);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [submitted, setSubmitted] = useState(false); // 按過註冊才顯示錯誤，不要一進來就一片紅
 
   // 檢查每個欄位，有問題就回傳錯誤文字
   const errors = {
-    name: !name.trim() ? '請輸入姓名' : '',
     email: !/^\S+@\S+\.\S+$/.test(email) ? '請輸入正確的 Email' : '',
-    phone: !/^09\d{2}-?\d{3}-?\d{3}$/.test(phone) ? '請輸入 09 開頭的手機號碼' : '',
     password: password.length < 8 ? '密碼至少 8 個字元' : '',
     confirm: confirm !== password ? '兩次輸入的密碼不一樣' : '',
     agreed: !agreed ? '請先同意服務條款與隱私政策' : '',
@@ -51,17 +44,16 @@ export default function RegisterScreen() {
   function handleRegister() {
     setSubmitted(true);
     if (hasError) return;
-    register({ name: name.trim(), email, phone, branch });
-    router.replace('/onboarding'); // 註冊完 → 新手引導 → 客戶總覽
+    register({ email });
+    router.replace('/setup-profile'); // 註冊完 → 填業務員資料 → 新手引導 → 首頁
   }
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <BackHeader title="建立帳號" />
-        <Text style={styles.subtitle}>填寫基本資料，30 秒完成註冊</Text>
+        <Text style={styles.subtitle}>步驟 1 / 2：建立登入帳號，下一步再填業務員資料</Text>
 
-        <Field label="姓名 *" value={name} onChangeText={setName} placeholder="例如：張偉明" error={show('name')} />
         <Field
           label="Email（員工信箱）*"
           value={email}
@@ -71,24 +63,6 @@ export default function RegisterScreen() {
           keyboardType="email-address"
           error={show('email')}
         />
-        <Field
-          label="手機 *"
-          value={phone}
-          onChangeText={setPhone}
-          placeholder="0912-345-678"
-          keyboardType="phone-pad"
-          error={show('phone')}
-        />
-
-        <Text style={styles.label}>所屬展間</Text>
-        <View style={styles.chipWrap}>
-          {branches.map((b) => (
-            <View key={b} style={{ marginBottom: 8 }}>
-              <Chip label={b} selected={branch === b} onPress={() => setBranch(b)} />
-            </View>
-          ))}
-        </View>
-
         <Field
           label="密碼 *"
           value={password}
@@ -134,7 +108,7 @@ export default function RegisterScreen() {
         {show('agreed') ? <Text style={styles.error}>{show('agreed')}</Text> : null}
 
         <Pressable style={styles.primaryBtn} onPress={handleRegister}>
-          <Text style={styles.primaryText}>註冊</Text>
+          <Text style={styles.primaryText}>下一步：填寫業務員資料</Text>
         </Pressable>
 
         <View style={styles.loginRow}>

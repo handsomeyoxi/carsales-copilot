@@ -10,10 +10,18 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="register" />
+        <Stack.Screen name="setup-profile" options={{ gestureEnabled: false }} />
         <Stack.Screen name="terms" options={{ presentation: 'modal' }} />
         <Stack.Screen name="onboarding" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="customer/[id]" />
+        <Stack.Screen name="customer-section" />
+        <Stack.Screen name="customer-edit" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="customer-list/[status]" />
+        <Stack.Screen name="followups" />
+        <Stack.Screen name="recordings" />
+        <Stack.Screen name="calendar" />
+        <Stack.Screen name="todo-add" options={{ presentation: 'modal' }} />
         <Stack.Screen name="summary" />
         <Stack.Screen name="revisit" />
         <Stack.Screen name="record/pick" options={{ presentation: 'transparentModal', animation: 'fade' }} />

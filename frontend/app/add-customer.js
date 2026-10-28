@@ -63,7 +63,16 @@ export default function AddCustomerScreen() {
   function handleCreate() {
     const interestedCar = [brand, model].filter(Boolean).join(' ');
     const note = [interestedCar, budget && `預算 ${budget}`].filter(Boolean).join(' · ') || source;
-    const created = addCustomer({ name, phone, source, temperature, budget, interestedCar, note });
+    const created = addCustomer({
+      name,
+      phone,
+      source,
+      temperature,
+      status: 'new',
+      interestedCar,
+      note,
+      needs: { lookingAt: interestedCar ? [interestedCar] : [], budget: budget || '尚未提及', features: [] },
+    });
     router.replace(`/customer/${created.id}`); // 建立成功 → 跳到這位客戶的詳情頁
   }
 

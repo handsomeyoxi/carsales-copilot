@@ -1,4 +1,4 @@
-// 下方分頁列：首頁 / 客戶 / 🎙️錄音（中間大按鈕）/ 待辦 / 我的
+// 下方分頁列：首頁 / 客戶 / 🎙️錄音（中間大按鈕）/ AI 助理 / 我的
 // 中間的錄音鈕不是真的分頁：按下去會攔截，改成打開「選客戶」彈窗
 import { Tabs, router } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
@@ -40,7 +40,7 @@ export default function TabsLayout() {
           },
         }}
       />
-      <Tabs.Screen name="todos" options={{ title: '待辦', tabBarIcon: () => <TabIcon emoji="✅" /> }} />
+      <Tabs.Screen name="assistant" options={{ title: 'AI 助理', tabBarIcon: () => <TabIcon emoji="💬" /> }} />
       <Tabs.Screen name="profile" options={{ title: '我的', tabBarIcon: () => <TabIcon emoji="👤" /> }} />
     </Tabs>
   );
