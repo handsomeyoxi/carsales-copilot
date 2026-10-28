@@ -1,6 +1,7 @@
 // 一筆待辦：點左邊方框可以打勾／取消
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Tag from './Tag';
+import { dayLabel } from '../utils/date';
 import { colors, radius } from '../theme';
 
 const priorityText = { high: '高', medium: '中', low: '低' };
@@ -16,7 +17,8 @@ export default function TodoItem({ todo, customerName, onToggle }) {
         <Text style={[styles.task, todo.done && styles.taskDone]}>{todo.task}</Text>
         <Text style={styles.meta}>
           {customerName ? `${customerName} · ` : ''}
-          {todo.due}
+          {todo.due || dayLabel(todo.date)}
+          {todo.time ? ` ${todo.time}` : ''}
         </Text>
       </View>
       <Tag label={priorityText[todo.priority]} tone={priorityTone[todo.priority]} />

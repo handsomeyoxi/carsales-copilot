@@ -1,35 +1,36 @@
-// 客戶詳情：基本資料、生命週期、成交機率、待辦、互動紀錄、錄音授權狀態
+// 客戶詳情：上方是客戶名片，下方分成四個格子
+// ① 基本資料 ② 客戶需求 ③ 成交機率 ④ 後續處理 —— 點格子才進去看完整內容（customer-section.js）
 // 檔名 [id] 代表「網址的這一段是變數」，例如 /customer/c1 → id = 'c1'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import BackHeader from '../../src/components/BackHeader';
-import ProbabilityBar from '../../src/components/ProbabilityBar';
-import SectionTitle from '../../src/components/SectionTitle';
-import StageTracker from '../../src/components/StageTracker';
-import Tag from '../../src/components/Tag';
-import TodoItem from '../../src/components/TodoItem';
+import CustomerTags from '../../src/components/CustomerTags';
 import { useCustomers } from '../../src/context/CustomerContext';
-import { analysis, interactions } from '../../src/data/mockData';
-import { goRecord } from '../../src/utils/recording';
+import { followUps } from '../../src/data/mockData';
 import { colors, radius } from '../../src/theme';
+import { dayLabel } from '../../src/utils/date';
+import { dealAnalysis, recommendCars } from '../../src/utils/insights';
+import { goRecord } from '../../src/utils/recording';
 
-const tempLabel = { hot: '熱', warm: '溫', cold: '冷' };
+// 每個格子的底色
+const tileColors = {
+  basic: colors.primaryLight,
+  needs: colors.blueLight,
+  deal: colors.greenLight,
+  next: colors.orangeLight,
+};
 
-function InfoLine({ label, value }) {
+function Tile({ no, icon, title, color, onPress, children }) {
   return (
-    <View style={styles.infoLine}>
-      <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={styles.infoValue}>{value || '—'}</Text>
-    </View>
-  );
-}
-
-function ActionButton({ emoji, label, onPress }) {
-  return (
-    <Pressable style={styles.actionBtn} onPress={onPress}>
-      <Text style={{ fontSize: 20 }}>{emoji}</Text>
-      <Text style={styles.actionText}>{label}</Text>
+    <Pressable style={[styles.tile, { backgroundColor: color }]} onPress={onPress}>
+      <View style={styles.tileHead}>
+        <Text style={styles.tileIcon}>{icon}</Text>
+        <Text style={styles.tileNo}>{no}</Text>
+      </View>
+      <Text style={styles.tileTitle}>{title}</Text>
+      <View style={{ flex: 1 }}>{children}</View>
+      <Text style={styles.tileMore}>查看 ›</Text>
     </Pressable>
   );
 }
@@ -37,7 +38,7 @@ function ActionButton({ emoji, label, onPress }) {
 export default function CustomerDetailScreen() {
   const { id } = useLocalSearchParams();
   const ctx = useCustomers();
-  const { getCustomer, todos, toggleTodo, consents } = ctx;
+  const { getCustomer, todos, profile } = ctx;
   const customer = getCustomer(id);
 
   if (!customer) {
@@ -50,91 +51,74 @@ export default function CustomerDetailScreen() {
     );
   }
 
-  const myTodos = todos.filter((t) => t.customerId === id);
-  const myConsent = consents.find((c) => c.customerId === id && c.status === 'active');
-  const life = analysis[id]?.lifecycle;
-  const history = interactions[id] || [];
+  const brand = profile.brand || 'BMW';
+  const needs = customer.needs || {};
+  const deal = dealAnalysis(customer);
+  const best = recommendCars(customer, brand)[0];
+  const openTodos = todos.filter((t) => t.customerId === id && !t.done).length;
+  const nextFollow = followUps.find((f) => f.customerId === id);
+  const open = (s) => router.push({ pathname: '/customer-section', params: { id, s } });
+  const probColor = deal.percentage >= 70 ? colors.green : deal.percentage >= 40 ? colors.orange : colors.red;
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <BackHeader
-          title={customer.name}
-          right={<Tag label={tempLabel[customer.temperature]} tone={customer.temperature} />}
-        />
+        <BackHeader title="客戶詳情" />
 
-        {/* 三個常用動作 */}
-        <View style={styles.actionRow}>
-          <ActionButton
-            emoji="🎙️"
-            label="開始錄音"
-            onPress={() => goRecord(ctx, id)}
-          />
-          <ActionButton
-            emoji="🧠"
-            label="AI 摘要"
-            onPress={() => router.push({ pathname: '/summary', params: { id } })}
-          />
-          <ActionButton
-            emoji="💡"
-            label="回訪軍師"
-            onPress={() => router.push({ pathname: '/revisit', params: { id } })}
-          />
-        </View>
-
-        {/* 基本資料 */}
+        {/* 客戶名片 */}
         <View style={styles.card}>
-          <InfoLine label="電話" value={customer.phone} />
-          <InfoLine label="來源" value={customer.source} />
-          <InfoLine label="興趣車款" value={customer.interestedCar} />
-          <InfoLine label="上次聯絡" value={customer.lastContactDays ? `${customer.lastContactDays} 天前` : '今天'} />
-        </View>
-
-        {/* 生命週期 + 成交機率 */}
-        <SectionTitle title="客戶生命週期" />
-        <View style={styles.card}>
-          <StageTracker stage={customer.stage} />
-          {life && <Text style={styles.lifeText}>下一步：{life.nextAction}</Text>}
-        </View>
-
-        <SectionTitle title="AI 成交機率" />
-        <View style={styles.card}>
-          <ProbabilityBar value={customer.closeProbability} height={10} />
-        </View>
-
-        {/* 待辦 */}
-        <SectionTitle title={`待辦事項（${myTodos.filter((t) => !t.done).length}）`} />
-        {myTodos.length === 0 && <Text style={styles.empty}>目前沒有待辦</Text>}
-        {myTodos.map((t) => (
-          <TodoItem key={t.id} todo={t} onToggle={() => toggleTodo(t.id)} />
-        ))}
-
-        {/* 互動紀錄時間軸 */}
-        <SectionTitle title="互動紀錄" />
-        {history.length === 0 && <Text style={styles.empty}>尚無互動紀錄</Text>}
-        {history.map((h, i) => (
-          <View key={h.id} style={styles.timelineRow}>
-            <View style={styles.timelineLeft}>
-              <View style={styles.dot} />
-              {i < history.length - 1 && <View style={styles.line} />}
-            </View>
-            <View style={{ flex: 1, paddingBottom: 14 }}>
-              <Text style={styles.timeMeta}>
-                {h.date} · {h.type}
-              </Text>
-              <Text style={styles.timeText}>{h.text}</Text>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>{customer.name[0]}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.name}>{customer.name}</Text>
+            <View style={{ marginTop: 4 }}>
+              <CustomerTags customer={customer} />
             </View>
           </View>
-        ))}
+        </View>
 
-        {/* 錄音授權狀態 */}
-        <SectionTitle title="錄音授權" />
-        <View style={[styles.card, { backgroundColor: myConsent ? colors.greenLight : colors.orangeLight }]}>
-          <Text style={{ color: myConsent ? colors.green : colors.orange, fontSize: 13 }}>
-            {myConsent
-              ? `🔒 已取得同意 · ${myConsent.time} · ${myConsent.method}`
-              : '⚠️ 尚未取得錄音同意，錄音前會先請客戶確認'}
-          </Text>
+        {/* 四個格子 */}
+        <View style={styles.grid}>
+          <Tile no="①" icon="👤" title="基本資料" color={tileColors.basic} onPress={() => open('basic')}>
+            <Text style={styles.line}>{customer.phone || '—'}</Text>
+            <Text style={styles.line}>{customer.source}</Text>
+            <Text style={styles.line}>
+              上次聯絡 {customer.lastContactDays ? `${customer.lastContactDays} 天前` : '今天'}
+            </Text>
+          </Tile>
+
+          <Tile no="②" icon="🚗" title="客戶需求" color={tileColors.needs} onPress={() => open('needs')}>
+            <Text style={styles.line} numberOfLines={1}>
+              {(needs.lookingAt || [])[0] || '尚未提及'}
+            </Text>
+            <Text style={styles.line}>預算 {needs.budget || '—'}</Text>
+            {best && (
+              <Text style={[styles.line, { color: colors.primary, fontWeight: '600' }]} numberOfLines={1}>
+                推薦 {best.name}
+              </Text>
+            )}
+          </Tile>
+
+          <Tile no="③" icon="📈" title="成交機率" color={tileColors.deal} onPress={() => open('deal')}>
+            <Text style={[styles.bigNum, { color: probColor }]}>{deal.percentage}%</Text>
+            <Text style={styles.line}>成交機率{deal.level}</Text>
+          </Tile>
+
+          <Tile no="④" icon="🗓️" title="後續處理" color={tileColors.next} onPress={() => open('next')}>
+            <Text style={styles.line}>{nextFollow ? `${dayLabel(nextFollow.date)}回訪` : '尚未排回訪'}</Text>
+            <Text style={styles.line}>待辦 {openTodos} 件</Text>
+          </Tile>
+        </View>
+
+        {/* 常用動作 */}
+        <View style={styles.actionRow}>
+          <Pressable style={[styles.actionBtn, styles.actionMain]} onPress={() => goRecord(ctx, id)}>
+            <Text style={[styles.actionText, { color: '#fff' }]}>🎙️ 開始錄音</Text>
+          </Pressable>
+          <Pressable style={styles.actionBtn} onPress={() => router.push({ pathname: '/summary', params: { id } })}>
+            <Text style={styles.actionText}>🧠 AI 摘要</Text>
+          </Pressable>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -143,27 +127,22 @@ export default function CustomerDetailScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
-  container: { padding: 20 },
-  actionRow: { flexDirection: 'row', marginBottom: 12 },
-  actionBtn: {
-    flex: 1,
-    backgroundColor: colors.primaryLight,
-    borderRadius: radius.md,
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginHorizontal: 3,
-  },
-  actionText: { fontSize: 12, color: colors.primary, marginTop: 4 },
-  card: { backgroundColor: colors.card, borderRadius: radius.md, padding: 14 },
-  infoLine: { flexDirection: 'row', paddingVertical: 5 },
-  infoLabel: { width: 72, fontSize: 13, color: colors.subText },
-  infoValue: { flex: 1, fontSize: 14, color: colors.text },
-  lifeText: { fontSize: 13, color: colors.text, marginTop: 12 },
-  empty: { color: colors.subText, fontSize: 13 },
-  timelineRow: { flexDirection: 'row' },
-  timelineLeft: { width: 18, alignItems: 'center' },
-  dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.primary, marginTop: 4 },
-  line: { flex: 1, width: 2, backgroundColor: colors.border, marginTop: 2 },
-  timeMeta: { fontSize: 12, color: colors.subText },
-  timeText: { fontSize: 14, color: colors.text, marginTop: 2 },
+  container: { padding: 20, paddingBottom: 40 },
+  card: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: radius.lg, padding: 16, marginBottom: 16 },
+  avatar: { width: 54, height: 54, borderRadius: 27, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center', marginRight: 14 },
+  avatarText: { fontSize: 22, fontWeight: '700', color: colors.primary },
+  name: { fontSize: 22, fontWeight: '700', color: colors.text },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
+  tile: { width: '48%', aspectRatio: 0.85, borderRadius: radius.lg, padding: 14, marginBottom: 14 },
+  tileHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  tileIcon: { fontSize: 26 },
+  tileNo: { fontSize: 15, color: colors.subText, fontWeight: '700' },
+  tileTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 8, marginBottom: 6 },
+  line: { fontSize: 12, color: colors.subText, lineHeight: 18 },
+  bigNum: { fontSize: 34, fontWeight: '800' },
+  tileMore: { fontSize: 12, color: colors.primary, fontWeight: '600', textAlign: 'right' },
+  actionRow: { flexDirection: 'row', marginTop: 4 },
+  actionBtn: { flex: 1, borderRadius: radius.md, paddingVertical: 14, alignItems: 'center', marginHorizontal: 4, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fff' },
+  actionMain: { backgroundColor: colors.primary, borderColor: colors.primary },
+  actionText: { fontSize: 15, color: colors.primary, fontWeight: '600' },
 });

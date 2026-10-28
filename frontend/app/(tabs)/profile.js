@@ -51,7 +51,9 @@ export default function ProfileScreen() {
             <Text style={styles.avatarText}>{salesperson.name[0]}</Text>
           </View>
           <Text style={styles.name}>{salesperson.name}</Text>
-          <Text style={styles.title}>{salesperson.title}</Text>
+          <View style={styles.brandBadge}>
+            <Text style={styles.brandBadgeText}>🚗 {salesperson.brand || '尚未設定品牌'} 業務</Text>
+          </View>
           <Tag
             label={`本月成交 ${salesperson.dealsThisMonth} 輛`}
             tone="green"
@@ -103,6 +105,8 @@ const styles = StyleSheet.create({
   avatarText: { fontSize: 24, color: colors.primary },
   name: { fontSize: 18, fontWeight: '600', marginTop: 10, color: colors.text },
   title: { fontSize: 13, color: colors.subText, marginTop: 2 },
+  brandBadge: { backgroundColor: colors.primaryLight, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 4, marginTop: 8 },
+  brandBadgeText: { fontSize: 13, color: colors.primary, fontWeight: '600' },
   sectionTitle: { fontSize: 12, color: colors.subText, marginTop: 8, marginBottom: 8 },
   infoRow: {
     flexDirection: 'row',
