@@ -15,28 +15,93 @@ function setCORS(res) {
 }
 
 
+// ===== 共用工具：業務員品牌、車款、日期、客戶狀態 =====
+
+const STATUSES = ["new", "following", "won"];
+const PRIORITIES = ["high", "medium", "low"];
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+// 讀業務員資料（salespersons/{uid}），沒有就回傳 null
+async function getSalesperson(salespersonId) {
+  if (!salespersonId) return null;
+  const doc = await db.collection("salespersons").doc(salespersonId).get();
+  return doc.exists ? { id: doc.id, ...doc.data() } : null;
+}
+
+// 取得可推薦的車款：有品牌就只拿自家品牌的車；沒有設定品牌（舊資料）才拿全部
+async function getCarsForBrand(brand) {
+  const query = brand ? db.collection("cars").where("brand", "==", brand) : db.collection("cars");
+  const snap = await query.get();
+  return snap.docs.map((doc) => ({ car_id: doc.id, ...doc.data() }));
+}
+
+// 由 AI 判斷的生命週期換算客戶狀態；「流失」或判斷不出來時回傳 null（維持原狀態）
+function statusFromStage(stage) {
+  if (stage === "初次接觸") return "new";
+  if (["需求確認", "報價中", "決策中"].includes(stage)) return "following";
+  if (stage === "成交") return "won";
+  return null;
+}
+
+// "2026-10-31" 加 n 天 → "2026-11-03"（純日期運算，不受時區影響）
+function addDays(dateString, days) {
+  const date = new Date(`${dateString}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+// 車款定價（元）：優先用 price（元），沒有就用 priceFrom（萬元）換算
+function basePriceOf(car) {
+  if (Number.isFinite(Number(car.price)) && Number(car.price) > 0) return Math.round(Number(car.price));
+  if (Number.isFinite(Number(car.priceFrom)) && Number(car.priceFrom) > 0) return Math.round(Number(car.priceFrom) * 10000);
+  return null;
+}
+
+// 報價單的所有數字都在這裡算，AI 不碰
+// optionItems：客戶選的選配名稱（要存在於 cars.options）；discount：業務員給的折扣（元），沒給就用車款預設折扣
+function computeQuotation(car, { optionItems = [], discount } = {}) {
+  const basePrice = basePriceOf(car);
+  if (basePrice === null) return null;
+
+  const carOptions = Array.isArray(car.options) ? car.options : [];
+  const options = carOptions
+    .map((o) => ({ item: o.item || o.name, price: Math.round(Number(o.price) || 0) }))
+    .filter((o) => o.item && optionItems.includes(o.item));
+
+  const subtotal = basePrice + options.reduce((sum, o) => sum + o.price, 0);
+  const rawDiscount = Number(discount ?? car.discount ?? 0);
+  const safeDiscount = Number.isFinite(rawDiscount) ? Math.min(Math.max(Math.round(rawDiscount), 0), subtotal) : 0;
+
+  return {
+    base_price: basePrice,
+    options,
+    subtotal,
+    discount: safeDiscount,
+    final_price: subtotal - safeDiscount,
+    currency: "TWD",
+  };
+}
+
+
 exports.analyzeConversation = functions.https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
   try {
-    const { conversationText, customerId } = req.body;
+    const { conversationText, salespersonId } = req.body;
 
     if (!conversationText) {
       return res.status(400).json({ error: "conversationText 是必填欄位" });
     }
 
-    
-    const inventorySnapshot = await db.collection("cars").get();
-    const carInventory = inventorySnapshot.docs.map((doc) => ({
-      car_id: doc.id,
-      ...doc.data(),
-    }));
+    // 只拿業務員自家品牌的車給 AI 推薦
+    const salesperson = await getSalesperson(salespersonId);
+    const brand = salesperson ? salesperson.brand || null : null;
+    const carInventory = await getCarsForBrand(brand);
 
-    
-    const result = await analyzeConversation(conversationText, carInventory);
+    const result = await analyzeConversation(conversationText, carInventory, brand);
 
-    return res.status(200).json({ success: true, data: result });
+    return res.status(200).json({ success: true, brand, data: result });
   } catch (error) {
     console.error("analyzeConversation error:", error);
     return res.status(500).json({ error: "AI 分析失敗，請稍後再試" });
@@ -49,66 +114,90 @@ exports.analyzeAfterConversation = functions.https.onRequest(async (req, res) =>
   if (req.method === "OPTIONS") return res.status(204).send("");
 
   try {
-    const { conversationText, customerId, salespersonId } = req.body;
+    const { conversationText, customerId, salespersonId, sessionId } = req.body;
 
     if (!conversationText || !customerId) {
       return res.status(400).json({ error: "conversationText 和 customerId 是必填欄位" });
     }
 
-    
-    let customerHistory = null;
-    const customerDoc = await db.collection("customers").doc(customerId).get();
-    if (customerDoc.exists) customerHistory = customerDoc.data();
+    const customerRef = db.collection("customers").doc(customerId);
+    const [customerDoc, salesperson] = await Promise.all([customerRef.get(), getSalesperson(salespersonId)]);
+    const customerHistory = customerDoc.exists ? customerDoc.data() : null;
+    const brand = salesperson ? salesperson.brand || null : null;
+    const carInventory = await getCarsForBrand(brand);
 
-    
-    const result = await analyzeAfterConversation(conversationText, customerHistory);
+    const today = toTaipeiDate(new Date());
+    // 回傳的結果已補齊預設值，少欄位也不會讓後面的程式掛掉
+    const result = await analyzeAfterConversation(conversationText, customerHistory, { today, brand, carInventory });
 
     const timestamp = FieldValue.serverTimestamp();
 
-    
     const conversationRef = await db.collection("conversations").add({
       customerId,
-      salespersonId,
+      salespersonId: salespersonId || null,
+      sessionId: sessionId || null, // 對應 stt-server 的 sessions，之後合併時用
       conversationText,
       analysis: result,
       createdAt: timestamp,
     });
 
-    
-    await db.collection("customers").doc(customerId).set(
-      {
-        lifecycleStage: result.lifecycle_stage.stage,
-        closeProbability: result.close_probability.percentage,
-        lastContactAt: timestamp,
-        latestConversationId: conversationRef.id,
-      },
-      { merge: true }
-    );
+    // 更新客戶：AI 判斷不出來的欄位不覆蓋舊值
+    const customerUpdate = {
+      lastContactAt: timestamp,
+      latestConversationId: conversationRef.id,
+      closeAnalysis: result.close_probability,
+      competitorComparison: result.competitor_comparison,
+    };
+    if (salespersonId && !(customerHistory && customerHistory.salespersonId)) {
+      customerUpdate.salespersonId = salespersonId;
+    }
+    if (result.lifecycle_stage.stage) customerUpdate.lifecycleStage = result.lifecycle_stage.stage;
+    if (result.close_probability.percentage !== null) {
+      customerUpdate.closeProbability = result.close_probability.percentage;
+    }
 
-    
+    // 客戶狀態：業務員手動改過（statusSource = manual）就不讓 AI 蓋掉
+    const derivedStatus = statusFromStage(result.lifecycle_stage.stage);
+    const manuallySet = customerHistory && customerHistory.statusSource === "manual";
+    if (derivedStatus && !manuallySet) {
+      customerUpdate.status = derivedStatus;
+      customerUpdate.statusSource = "ai";
+    } else if (!customerHistory || !customerHistory.status) {
+      // 新客戶又判斷不出階段時，至少給一個預設狀態，前端才分得了類
+      customerUpdate.status = "new";
+      customerUpdate.statusSource = "ai";
+    }
+
+    await customerRef.set(customerUpdate, { merge: true });
+
+    // 待辦：存真正的日期 dueDate，前端月曆才放得上去
     const todoBatch = db.batch();
     for (const todo of result.todos) {
       const todoRef = db.collection("todos").doc();
       todoBatch.set(todoRef, {
         customerId,
-        salespersonId,
+        salespersonId: salespersonId || null,
+        conversationId: conversationRef.id,
         task: todo.task,
         priority: todo.priority,
+        dueDate: addDays(today, todo.due_in_days),
         dueDateSuggestion: todo.due_date_suggestion,
+        time: null,
         isDone: false,
+        source: "ai",
         createdAt: timestamp,
       });
     }
     await todoBatch.commit();
 
-    
     const followUpDate = new Date();
-    followUpDate.setDate(followUpDate.getDate() + (result.follow_up.suggested_date || 3));
+    followUpDate.setDate(followUpDate.getDate() + result.follow_up.suggested_date);
 
     await db.collection("followUps").add({
       customerId,
-      salespersonId,
+      salespersonId: salespersonId || null,
       followUpDate: Timestamp.fromDate(followUpDate),
+      dueDate: addDays(today, result.follow_up.suggested_date),
       followUpScript: result.follow_up.follow_up_script,
       reason: result.follow_up.suggested_date_reason,
       isDone: false,
@@ -118,6 +207,7 @@ exports.analyzeAfterConversation = functions.https.onRequest(async (req, res) =>
     return res.status(200).json({
       success: true,
       conversationId: conversationRef.id,
+      status: customerUpdate.status || (customerHistory && customerHistory.status) || null,
       data: result,
     });
   } catch (error) {
@@ -132,7 +222,7 @@ exports.generateQuotation = functions.https.onRequest(async (req, res) => {
   if (req.method === "OPTIONS") return res.status(204).send("");
 
   try {
-    const { customerId, carId, conversationText } = req.body;
+    const { customerId, carId, conversationText, optionItems, discount } = req.body;
 
     if (!customerId || !carId) {
       return res.status(400).json({ error: "customerId 和 carId 是必填欄位" });
@@ -146,23 +236,40 @@ exports.generateQuotation = functions.https.onRequest(async (req, res) => {
     if (!customerDoc.exists) return res.status(404).json({ error: "找不到客戶資料" });
     if (!carDoc.exists) return res.status(404).json({ error: "找不到車款資料" });
 
-    const result = await generateQuotation(
-      customerDoc.data(),
-      { car_id: carId, ...carDoc.data() },
-      conversationText || ""
-    );
+    const car = { car_id: carId, ...carDoc.data() };
+    const pricing = computeQuotation(car, {
+      optionItems: Array.isArray(optionItems) ? optionItems : [],
+      discount,
+    });
+    if (!pricing) {
+      return res.status(400).json({ error: "這台車沒有價格資料（price 或 priceFrom），無法報價" });
+    }
+
+    const customer = customerDoc.data();
+    const text = await generateQuotation(customer, car, pricing, conversationText || "");
+
+    const today = toTaipeiDate(new Date());
+    const quotation = {
+      date: today,
+      valid_until: addDays(today, 7),
+      customer_name: customer.name || null,
+      car_model: car.name || null,
+      ...pricing,
+      notes: text.notes,
+      salesperson_message: text.salesperson_message,
+    };
 
     const quotationRef = await db.collection("quotations").add({
       customerId,
       carId,
-      quotation: result.quotation,
+      quotation,
       createdAt: FieldValue.serverTimestamp(),
     });
 
     return res.status(200).json({
       success: true,
       quotationId: quotationRef.id,
-      data: result,
+      data: { quotation },
     });
   } catch (error) {
     console.error("generateQuotation error:", error);
@@ -184,11 +291,9 @@ exports.getDashboard = functions.https.onRequest(async (req, res) => {
 
     const sevenDaysLater = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
+    // todos、followUps 用了 where＋orderBy，需要 firestore.indexes.json 裡的複合索引
     const [customersSnap, todosSnap, followUpsSnap] = await Promise.all([
-      db.collection("customers")
-        .where("salespersonId", "==", salespersonId)
-        .orderBy("closeProbability", "desc")
-        .get(),
+      db.collection("customers").where("salespersonId", "==", salespersonId).get(),
       db.collection("todos")
         .where("salespersonId", "==", salespersonId)
         .where("isDone", "==", false)
@@ -202,7 +307,10 @@ exports.getDashboard = functions.https.onRequest(async (req, res) => {
         .get(),
     ]);
 
-    const customers = customersSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    // 客戶在程式裡排序：用 orderBy 的話，還沒有 closeProbability 的新客戶會整個查不到
+    const customers = customersSnap.docs
+      .map((doc) => ({ id: doc.id, ...doc.data() }))
+      .sort((a, b) => (b.closeProbability ?? -1) - (a.closeProbability ?? -1));
     const todos = todosSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     const followUps = followUpsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 
@@ -214,6 +322,11 @@ exports.getDashboard = functions.https.onRequest(async (req, res) => {
           highProbability: customers.filter((c) => c.closeProbability >= 70).length,
           pendingTodos: todos.length,
           upcomingFollowUps: followUps.length,
+          byStatus: {
+            new: customers.filter((c) => c.status === "new").length,
+            following: customers.filter((c) => c.status === "following").length,
+            won: customers.filter((c) => c.status === "won").length,
+          },
         },
         customers,
         todos,
@@ -223,6 +336,124 @@ exports.getDashboard = functions.https.onRequest(async (req, res) => {
   } catch (error) {
     console.error("getDashboard error:", error);
     return res.status(500).json({ error: "Dashboard 資料載入失敗" });
+  }
+});
+
+
+// 業務員註冊／修改資料：存 salespersons/{uid}，brand 決定推薦哪個品牌的車
+exports.saveSalesperson = functions.https.onRequest(async (req, res) => {
+  setCORS(res);
+  if (req.method === "OPTIONS") return res.status(204).send("");
+
+  try {
+    const { salespersonId, name, phone, email, brand } = req.body;
+
+    if (!salespersonId) return res.status(400).json({ error: "salespersonId 是必填欄位" });
+
+    const update = { updatedAt: FieldValue.serverTimestamp() };
+    if (name !== undefined) update.name = name;
+    if (phone !== undefined) update.phone = phone;
+    if (email !== undefined) update.email = email;
+    if (brand !== undefined) {
+      if (typeof brand !== "string" || brand.trim() === "") {
+        return res.status(400).json({ error: "brand 不能是空的" });
+      }
+      update.brand = brand.trim();
+    }
+
+    const ref = db.collection("salespersons").doc(salespersonId);
+    await ref.set(update, { merge: true });
+    const saved = await ref.get();
+
+    return res.status(200).json({ success: true, data: { id: saved.id, ...saved.data() } });
+  } catch (error) {
+    console.error("saveSalesperson error:", error);
+    return res.status(500).json({ error: "業務員資料儲存失敗" });
+  }
+});
+
+
+// 業務員手動改客戶狀態：標記 statusSource = manual，之後 AI 分析就不會蓋掉
+// 傳 status: null 代表「交還給 AI 判斷」
+exports.updateCustomerStatus = functions.https.onRequest(async (req, res) => {
+  setCORS(res);
+  if (req.method === "OPTIONS") return res.status(204).send("");
+
+  try {
+    const { customerId, status } = req.body;
+
+    if (!customerId) return res.status(400).json({ error: "customerId 是必填欄位" });
+    if (status !== null && !STATUSES.includes(status)) {
+      return res.status(400).json({ error: "status 只能是 new / following / won，或 null（交還給 AI）" });
+    }
+
+    const update =
+      status === null
+        ? { statusSource: "ai" }
+        : { status, statusSource: "manual", statusUpdatedAt: FieldValue.serverTimestamp() };
+
+    await db.collection("customers").doc(customerId).set(update, { merge: true });
+    return res.status(200).json({ success: true, data: { customerId, ...update, statusUpdatedAt: undefined } });
+  } catch (error) {
+    console.error("updateCustomerStatus error:", error);
+    return res.status(500).json({ error: "客戶狀態更新失敗" });
+  }
+});
+
+
+// 業務員自己新增或修改待辦（和 AI 產生的待辦放在同一個 todos collection）
+// 沒帶 id = 新增；帶 id = 修改（例如打勾完成、改日期）
+exports.saveTodo = functions.https.onRequest(async (req, res) => {
+  setCORS(res);
+  if (req.method === "OPTIONS") return res.status(204).send("");
+
+  try {
+    const { id, salespersonId, customerId, task, dueDate, time, priority, isDone } = req.body;
+
+    if (dueDate !== undefined && !DATE_PATTERN.test(dueDate)) {
+      return res.status(400).json({ error: "dueDate 格式要是 YYYY-MM-DD" });
+    }
+    if (priority !== undefined && !PRIORITIES.includes(priority)) {
+      return res.status(400).json({ error: "priority 只能是 high / medium / low" });
+    }
+
+    if (!id) {
+      if (!salespersonId || !task || !dueDate) {
+        return res.status(400).json({ error: "新增待辦需要 salespersonId、task、dueDate" });
+      }
+      const data = {
+        salespersonId,
+        customerId: customerId || null,
+        task,
+        dueDate,
+        time: time || null,
+        priority: priority || "medium",
+        isDone: Boolean(isDone),
+        source: "manual",
+        createdAt: FieldValue.serverTimestamp(),
+      };
+      const ref = await db.collection("todos").add(data);
+      return res.status(200).json({ success: true, data: { id: ref.id, ...data, createdAt: undefined } });
+    }
+
+    const ref = db.collection("todos").doc(id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: "找不到這筆待辦" });
+
+    const update = { updatedAt: FieldValue.serverTimestamp() };
+    if (task !== undefined) update.task = task;
+    if (customerId !== undefined) update.customerId = customerId || null;
+    if (dueDate !== undefined) update.dueDate = dueDate;
+    if (time !== undefined) update.time = time || null;
+    if (priority !== undefined) update.priority = priority;
+    if (isDone !== undefined) update.isDone = Boolean(isDone);
+
+    await ref.set(update, { merge: true });
+    const saved = await ref.get();
+    return res.status(200).json({ success: true, data: { id, ...saved.data() } });
+  } catch (error) {
+    console.error("saveTodo error:", error);
+    return res.status(500).json({ error: "待辦儲存失敗" });
   }
 });
 

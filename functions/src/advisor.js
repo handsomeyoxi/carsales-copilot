@@ -1,49 +1,7 @@
 // D 組負責的 AI 功能：硬需求標籤、情緒價值標籤、情緒分析、回訪軍師
 // 與 gemini.js 分開放，避免兩個人同時改同一個檔案。
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// 要跟 gemini.js 裡的 MODEL 保持一致
-const MODEL = "gemini-3.8-flash";
-
-// 分析類任務要穩定，所以溫度調低，並要求直接回傳 JSON
-const GENERATION_CONFIG = {
-  temperature: 0.2,
-  responseMimeType: "application/json",
-};
-
-function safeParseJSON(text) {
-  const cleaned = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-  return JSON.parse(cleaned);
-}
-
-// Gemini 暫時塞車（503）、伺服器錯誤（500）或太頻繁（429）時，等一下自動重試
-const RETRY_STATUS = [429, 500, 503];
-const RETRY_WAIT_MS = [2000, 4000]; // 第一次失敗等 2 秒，第二次失敗等 4 秒，總共最多試 3 次
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function askGemini(prompt) {
-  const model = genAI.getGenerativeModel({
-    model: MODEL,
-    generationConfig: GENERATION_CONFIG,
-  });
-
-  for (let attempt = 0; ; attempt++) {
-    try {
-      const result = await model.generateContent(prompt);
-      return safeParseJSON(result.response.text());
-    } catch (error) {
-      const canRetry = RETRY_STATUS.includes(error.status) && attempt < RETRY_WAIT_MS.length;
-      if (!canRetry) throw error;
-      console.warn(`Gemini 回應 ${error.status}，${RETRY_WAIT_MS[attempt] / 1000} 秒後重試（第 ${attempt + 1} 次）`);
-      await sleep(RETRY_WAIT_MS[attempt]);
-    }
-  }
-}
+// askGemini（JSON 模式＋自動重試）已搬到共用的 ai.js，gemini.js 也用同一個
+const { askGemini } = require("./ai");
 
 // 功能一：從單次對話抓出「硬需求標籤」「情緒價值標籤」與「客戶情緒」
 async function analyzeInsight(conversationText) {
