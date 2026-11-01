@@ -27,16 +27,11 @@ function levelOf(percentage) {
   return percentage >= 70 ? "高" : percentage >= 40 ? "中" : "低";
 }
 
-// 只把 AI 需要的車款欄位送出去，節省免費額度
+// 送給 AI 的車款資料：保留車款本身的欄位（features、usage、price 等），拿掉時間戳之類 AI 用不到的欄位
 function carsForPrompt(cars) {
-  return cars.map((c) => ({
-    car_id: c.car_id || c.id,
-    brand: c.brand || null,
-    name: c.name || null,
-    type: c.type || null,
-    priceFrom: c.priceFrom ?? null,
-    strengths: c.strengths || undefined,
-    rival: c.rival || undefined,
+  return cars.map(({ createdAt, updatedAt, ...car }) => ({
+    ...car,
+    car_id: car.car_id || car.id,
   }));
 }
 
