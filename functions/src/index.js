@@ -517,6 +517,70 @@ function toDateString(timestamp) {
   return timestamp && timestamp.toDate ? toTaipeiDate(timestamp.toDate()) : null;
 }
 
+// 標籤種類 → 文字放在哪個欄位（硬需求用 value，情緒價值用 label）
+const TAG_TEXT_FIELDS = { hardNeeds: "value", emotionalValues: "label" };
+
+
+// 業務員手動確認／修正／新增標籤：存成 source: "manual"，之後 AI 分析不會蓋掉
+// body: { customerId, type: "hardNeeds" | "emotionalValues", category, value, oldValue? }
+// - 確認 AI 的標籤：value = 原本的內容
+// - 修正 AI 的標籤：oldValue = 原本的內容，value = 改過的內容
+// - 新增：不帶 oldValue
+exports.saveCustomerTag = functions.https.onRequest(async (req, res) => {
+  setCORS(res);
+  if (req.method === "OPTIONS") return res.status(204).send("");
+
+  try {
+    const { customerId, type, category, value, oldValue } = req.body;
+    const textField = TAG_TEXT_FIELDS[type];
+
+    if (!customerId) return res.status(400).json({ error: "customerId 是必填欄位" });
+    if (!textField) return res.status(400).json({ error: "type 只能是 hardNeeds 或 emotionalValues" });
+    if (typeof category !== "string" || category.trim() === "") {
+      return res.status(400).json({ error: "category 是必填欄位" });
+    }
+    if (typeof value !== "string" || value.trim() === "") {
+      return res.status(400).json({ error: "value 不能是空的" });
+    }
+
+    const customerRef = db.collection("customers").doc(customerId);
+    const customerDoc = await customerRef.get();
+    if (!customerDoc.exists) return res.status(404).json({ error: "找不到客戶資料" });
+
+    const cat = category.trim();
+    const text = value.trim();
+    const existing = Array.isArray(customerDoc.data()[type]) ? customerDoc.data()[type] : [];
+
+    // 拿掉要被取代的舊標籤：被修正的那一個、內容相同的重複標籤；單一答案類別（例如預算）整個類別換掉
+    const kept = existing.filter((t) => {
+      if (!t || t.category !== cat) return true;
+      if (SINGLE_VALUE_CATEGORIES.includes(cat)) return false;
+      return t[textField] !== text && t[textField] !== oldValue;
+    });
+
+    // 如果是確認或修正 AI 的標籤，保留原本的其他欄位（例如 confidence）
+    const original = existing.find(
+      (t) => t && t.category === cat && (t[textField] === oldValue || t[textField] === text)
+    );
+    const tag = {
+      ...(original || {}),
+      category: cat,
+      [textField]: text,
+      source: "manual",
+      // 陣列裡不能放 serverTimestamp，所以用字串時間
+      updatedAt: new Date().toISOString(),
+    };
+
+    const updated = [...kept, tag];
+    await customerRef.set({ [type]: updated }, { merge: true });
+
+    return res.status(200).json({ success: true, data: { customerId, [type]: updated } });
+  } catch (error) {
+    console.error("saveCustomerTag error:", error);
+    return res.status(500).json({ error: "標籤儲存失敗" });
+  }
+});
+
 
 exports.analyzeInsight = functions.https.onRequest(async (req, res) => {
   setCORS(res);
