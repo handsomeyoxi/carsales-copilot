@@ -4,16 +4,16 @@
   "description": "CarSales Copilot - Firebase Functions + Gemini API",
   "main": "src/index.js",
   "engines": {
-    "node": "18"
+    "node": "22"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.15.0",
-    "dotenv": "^18.0.5",
+    "@google/generative-ai": "^0.24.1",
     "firebase-admin": "^12.0.0",
     "firebase-functions": "^4.7.0"
   },
   "scripts": {
     "serve": "firebase emulators:start --only functions",
-    "deploy": "firebase deploy --only functions"
+    "deploy": "firebase deploy --only functions",
+    "check": "node --check src/index.js && node --check src/gemini.js && node --check src/ai.js && node --check src/advisor.js"
   }
 }
