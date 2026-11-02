@@ -72,13 +72,22 @@ interest_level 為 1 到 5 的整數：1 = 只是看看，3 = 有興趣但還在
 }
 
 // 功能二：回訪軍師，根據這位客戶累積的所有紀錄給三段話術與避免重提清單
-async function followUpAdvisor(customer, history, today) {
+// brand：業務員代理的品牌（salespersons.brand），沒設定就是 null
+async function followUpAdvisor(customer, history, today, { brand = null } = {}) {
+  const brandRule = brand
+    ? `業務員代理的品牌是「${brand}」。話術裡推薦或介紹的車款只能是 ${brand} 的車，不可以推薦其他品牌。
+如果客戶也在看其他品牌（例如 hardNeeds 的車款標籤），要用「${brand} 的優勢」來回應比較，不要貶低對手，也不要幫對手推銷。`
+    : "業務員尚未設定代理品牌，話術中不要主動推薦特定品牌的車款，以客戶已經在看的車款為主。";
+
   const prompt = `
 你是一位資深汽車銷售主管，正在指導業務員準備回訪客戶。
 請根據這位客戶累積的資料，給出這一次回訪的具體作戰建議。
 
 【今天日期】
 ${today}
+
+【業務員品牌】
+${brandRule}
 
 【客戶目前狀態】
 （hardNeeds 是硬需求標籤，emotionalValues 是情緒價值標籤，confidence 是當時 AI 對該標籤的把握，0 到 100）

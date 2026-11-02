@@ -461,21 +461,45 @@ exports.saveTodo = functions.https.onRequest(async (req, res) => {
 // ===== 以下為新增：硬需求標籤、情緒價值標籤、情緒分析、回訪軍師 =====
 
 // 把這次對話的新標籤併入客戶原有的標籤
-// - 同一類別、同一內容的標籤：用新的取代舊的
-// - 只會有一個答案的類別（例如預算）：新的出現時，舊的整個換掉
+// - 業務員手動加的標籤（source: "manual"）永遠保留，AI 不能蓋掉
+// - 只會有一個答案的類別（例如預算）：有手動標籤時，AI 在這個類別的新標籤直接忽略
+// - 同一類別、同一內容的 AI 標籤：用新的取代舊的
+// - 只會有一個答案的類別：AI 的新標籤出現時，舊的 AI 標籤整個換掉
 // - 其他：新舊都保留
+// - 以前沒有 source 的舊資料，當成 AI 標籤處理
 const SINGLE_VALUE_CATEGORIES = ["預算", "購車時間", "付款方式", "舊車換購"];
 
 function mergeTags(oldTags, newTags, textField) {
-  const incoming = Array.isArray(newTags) ? newTags.filter((t) => t && t.category && t[textField]) : [];
+  const keyOf = (t) => `${t.category}|${t[textField]}`;
   const existing = Array.isArray(oldTags) ? oldTags : [];
-  const incomingKeys = new Set(incoming.map((t) => `${t.category}|${t[textField]}`));
+
+  // 業務員手動加的標籤：永遠保留，AI 不能蓋掉
+  const manualTags = existing.filter((t) => t && t.source === "manual");
+  const manualKeys = new Set(manualTags.map(keyOf));
+  // 單一答案類別（例如預算）只要有手動標籤，這個類別就由業務員決定
+  const lockedCategories = new Set(
+    manualTags.map((t) => t.category).filter((c) => SINGLE_VALUE_CATEGORIES.includes(c))
+  );
+
+  // 這次 AI 的新標籤：去掉格式不對的、跟手動標籤重複的、被鎖住類別的，並標記 source: "ai"
+  const incoming = (Array.isArray(newTags) ? newTags : [])
+    .filter((t) => t && t.category && t[textField])
+    .filter((t) => !manualKeys.has(keyOf(t)) && !lockedCategories.has(t.category))
+    .map((t) => ({ ...t, source: "ai" }));
+
+  const incomingKeys = new Set(incoming.map(keyOf));
   const replacedCategories = new Set(
     incoming.map((t) => t.category).filter((c) => SINGLE_VALUE_CATEGORIES.includes(c))
   );
+
+  // 舊標籤：手動的全留；AI 的（或沒有 source 的舊資料）照原本規則決定要不要被取代
   const kept = existing.filter(
-    (t) => !incomingKeys.has(`${t.category}|${t[textField]}`) && !replacedCategories.has(t.category)
+    (t) =>
+      t &&
+      (t.source === "manual" ||
+        (!incomingKeys.has(keyOf(t)) && !replacedCategories.has(t.category)))
   );
+
   return [...kept, ...incoming];
 }
 
@@ -492,6 +516,104 @@ function toTaipeiDate(date) {
 function toDateString(timestamp) {
   return timestamp && timestamp.toDate ? toTaipeiDate(timestamp.toDate()) : null;
 }
+
+// 標籤種類 → 文字放在哪個欄位（硬需求用 value，情緒價值用 label）
+const TAG_TEXT_FIELDS = { hardNeeds: "value", emotionalValues: "label" };
+
+// 從「約 400 萬」「150–170 萬」抓出預算上限（萬元，取最大的數字），跟前端 parseBudgetMax 一樣
+function parseBudgetMax(text) {
+  const nums = (String(text).replace(/,/g, "").match(/\d+(\.\d+)?/g) || []).map(Number);
+  return nums.length ? Math.max(...nums) : null;
+}
+
+// 硬需求標籤 → 前端的 needs 格式
+// { lookingAt, budget, budgetMax, type, usage, features }
+// 同一類別有多個標籤時，手動的優先，其次是最新的（mergeTags 會把新的放在後面）
+function hardNeedsToNeeds(hardNeeds) {
+  const tags = (Array.isArray(hardNeeds) ? hardNeeds : []).filter(
+    (t) => t && typeof t.value === "string" && t.value.trim() !== ""
+  );
+  const valuesOf = (category) => {
+    const list = tags.filter((t) => t.category === category);
+    const manual = list.filter((t) => t.source === "manual");
+    const others = list.filter((t) => t.source !== "manual").reverse(); // 新的在前
+    return [...new Set([...manual, ...others].map((t) => t.value.trim()))];
+  };
+
+  const budget = valuesOf("預算")[0] || null;
+  return {
+    lookingAt: valuesOf("車款"),
+    budget,
+    budgetMax: budget ? parseBudgetMax(budget) : null,
+    type: valuesOf("車型")[0] || null,
+    usage: valuesOf("用途").join("、") || null,
+    features: [...valuesOf("配備"), ...valuesOf("顏色")],
+  };
+}
+
+
+// 業務員手動確認／修正／新增標籤：存成 source: "manual"，之後 AI 分析不會蓋掉
+// body: { customerId, type: "hardNeeds" | "emotionalValues", category, value, oldValue? }
+// - 確認 AI 的標籤：value = 原本的內容
+// - 修正 AI 的標籤：oldValue = 原本的內容，value = 改過的內容
+// - 新增：不帶 oldValue
+exports.saveCustomerTag = functions.https.onRequest(async (req, res) => {
+  setCORS(res);
+  if (req.method === "OPTIONS") return res.status(204).send("");
+
+  try {
+    const { customerId, type, category, value, oldValue } = req.body;
+    const textField = TAG_TEXT_FIELDS[type];
+
+    if (!customerId) return res.status(400).json({ error: "customerId 是必填欄位" });
+    if (!textField) return res.status(400).json({ error: "type 只能是 hardNeeds 或 emotionalValues" });
+    if (typeof category !== "string" || category.trim() === "") {
+      return res.status(400).json({ error: "category 是必填欄位" });
+    }
+    if (typeof value !== "string" || value.trim() === "") {
+      return res.status(400).json({ error: "value 不能是空的" });
+    }
+
+    const customerRef = db.collection("customers").doc(customerId);
+    const customerDoc = await customerRef.get();
+    if (!customerDoc.exists) return res.status(404).json({ error: "找不到客戶資料" });
+
+    const cat = category.trim();
+    const text = value.trim();
+    const existing = Array.isArray(customerDoc.data()[type]) ? customerDoc.data()[type] : [];
+
+    // 拿掉要被取代的舊標籤：被修正的那一個、內容相同的重複標籤；單一答案類別（例如預算）整個類別換掉
+    const kept = existing.filter((t) => {
+      if (!t || t.category !== cat) return true;
+      if (SINGLE_VALUE_CATEGORIES.includes(cat)) return false;
+      return t[textField] !== text && t[textField] !== oldValue;
+    });
+
+    // 如果是確認或修正 AI 的標籤，保留原本的其他欄位（例如 confidence）
+    const original = existing.find(
+      (t) => t && t.category === cat && (t[textField] === oldValue || t[textField] === text)
+    );
+    const tag = {
+      ...(original || {}),
+      category: cat,
+      [textField]: text,
+      source: "manual",
+      // 陣列裡不能放 serverTimestamp，所以用字串時間
+      updatedAt: new Date().toISOString(),
+    };
+
+    const updated = [...kept, tag];
+    const update = { [type]: updated };
+    // 硬需求改了，前端用的 needs 也要跟著更新
+    if (type === "hardNeeds") update.needs = hardNeedsToNeeds(updated);
+    await customerRef.set(update, { merge: true });
+
+    return res.status(200).json({ success: true, data: { customerId, ...update } });
+  } catch (error) {
+    console.error("saveCustomerTag error:", error);
+    return res.status(500).json({ error: "標籤儲存失敗" });
+  }
+});
 
 
 exports.analyzeInsight = functions.https.onRequest(async (req, res) => {
@@ -521,9 +643,11 @@ exports.analyzeInsight = functions.https.onRequest(async (req, res) => {
       const customerDoc = await customerRef.get();
       const current = customerDoc.exists ? customerDoc.data() : {};
 
+      const hardNeeds = mergeTags(current.hardNeeds, result.hard_needs, "value");
       await customerRef.set(
         {
-          hardNeeds: mergeTags(current.hardNeeds, result.hard_needs, "value"),
+          hardNeeds,
+          needs: hardNeedsToNeeds(hardNeeds), // 前端客戶頁用的格式
           emotionalValues: mergeTags(current.emotionalValues, result.emotional_values, "label"),
           concerns: mergeStrings(current.concerns, result.concerns),
           latestEmotion: result.emotion || null,
@@ -545,7 +669,7 @@ exports.followUpAdvisor = functions.https.onRequest(async (req, res) => {
   if (req.method === "OPTIONS") return res.status(204).send("");
 
   try {
-    const { customerId } = req.body;
+    const { customerId, salespersonId } = req.body;
 
     if (!customerId) {
       return res.status(400).json({ error: "customerId 是必填欄位" });
@@ -592,8 +716,12 @@ exports.followUpAdvisor = functions.https.onRequest(async (req, res) => {
       latestEmotion: customerData.latestEmotion || null,
     };
 
+    // 業務員品牌：有傳 salespersonId 就用它，沒有就用客戶資料上的 salespersonId
+    const salesperson = await getSalesperson(salespersonId || customerData.salespersonId);
+    const brand = salesperson ? salesperson.brand || null : null;
+
     const today = toTaipeiDate(new Date());
-    const result = await followUpAdvisor(customer, history, today);
+    const result = await followUpAdvisor(customer, history, today, { brand });
 
     await db.collection("customers").doc(customerId).set(
       {
