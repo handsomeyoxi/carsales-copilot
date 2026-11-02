@@ -669,7 +669,7 @@ exports.followUpAdvisor = functions.https.onRequest(async (req, res) => {
   if (req.method === "OPTIONS") return res.status(204).send("");
 
   try {
-    const { customerId } = req.body;
+    const { customerId, salespersonId } = req.body;
 
     if (!customerId) {
       return res.status(400).json({ error: "customerId 是必填欄位" });
@@ -716,8 +716,12 @@ exports.followUpAdvisor = functions.https.onRequest(async (req, res) => {
       latestEmotion: customerData.latestEmotion || null,
     };
 
+    // 業務員品牌：有傳 salespersonId 就用它，沒有就用客戶資料上的 salespersonId
+    const salesperson = await getSalesperson(salespersonId || customerData.salespersonId);
+    const brand = salesperson ? salesperson.brand || null : null;
+
     const today = toTaipeiDate(new Date());
-    const result = await followUpAdvisor(customer, history, today);
+    const result = await followUpAdvisor(customer, history, today, { brand });
 
     await db.collection("customers").doc(customerId).set(
       {
