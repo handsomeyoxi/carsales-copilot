@@ -520,6 +520,37 @@ function toDateString(timestamp) {
 // 標籤種類 → 文字放在哪個欄位（硬需求用 value，情緒價值用 label）
 const TAG_TEXT_FIELDS = { hardNeeds: "value", emotionalValues: "label" };
 
+// 從「約 400 萬」「150–170 萬」抓出預算上限（萬元，取最大的數字），跟前端 parseBudgetMax 一樣
+function parseBudgetMax(text) {
+  const nums = (String(text).replace(/,/g, "").match(/\d+(\.\d+)?/g) || []).map(Number);
+  return nums.length ? Math.max(...nums) : null;
+}
+
+// 硬需求標籤 → 前端的 needs 格式
+// { lookingAt, budget, budgetMax, type, usage, features }
+// 同一類別有多個標籤時，手動的優先，其次是最新的（mergeTags 會把新的放在後面）
+function hardNeedsToNeeds(hardNeeds) {
+  const tags = (Array.isArray(hardNeeds) ? hardNeeds : []).filter(
+    (t) => t && typeof t.value === "string" && t.value.trim() !== ""
+  );
+  const valuesOf = (category) => {
+    const list = tags.filter((t) => t.category === category);
+    const manual = list.filter((t) => t.source === "manual");
+    const others = list.filter((t) => t.source !== "manual").reverse(); // 新的在前
+    return [...new Set([...manual, ...others].map((t) => t.value.trim()))];
+  };
+
+  const budget = valuesOf("預算")[0] || null;
+  return {
+    lookingAt: valuesOf("車款"),
+    budget,
+    budgetMax: budget ? parseBudgetMax(budget) : null,
+    type: valuesOf("車型")[0] || null,
+    usage: valuesOf("用途").join("、") || null,
+    features: [...valuesOf("配備"), ...valuesOf("顏色")],
+  };
+}
+
 
 // 業務員手動確認／修正／新增標籤：存成 source: "manual"，之後 AI 分析不會蓋掉
 // body: { customerId, type: "hardNeeds" | "emotionalValues", category, value, oldValue? }
@@ -572,9 +603,12 @@ exports.saveCustomerTag = functions.https.onRequest(async (req, res) => {
     };
 
     const updated = [...kept, tag];
-    await customerRef.set({ [type]: updated }, { merge: true });
+    const update = { [type]: updated };
+    // 硬需求改了，前端用的 needs 也要跟著更新
+    if (type === "hardNeeds") update.needs = hardNeedsToNeeds(updated);
+    await customerRef.set(update, { merge: true });
 
-    return res.status(200).json({ success: true, data: { customerId, [type]: updated } });
+    return res.status(200).json({ success: true, data: { customerId, ...update } });
   } catch (error) {
     console.error("saveCustomerTag error:", error);
     return res.status(500).json({ error: "標籤儲存失敗" });
@@ -609,9 +643,11 @@ exports.analyzeInsight = functions.https.onRequest(async (req, res) => {
       const customerDoc = await customerRef.get();
       const current = customerDoc.exists ? customerDoc.data() : {};
 
+      const hardNeeds = mergeTags(current.hardNeeds, result.hard_needs, "value");
       await customerRef.set(
         {
-          hardNeeds: mergeTags(current.hardNeeds, result.hard_needs, "value"),
+          hardNeeds,
+          needs: hardNeedsToNeeds(hardNeeds), // 前端客戶頁用的格式
           emotionalValues: mergeTags(current.emotionalValues, result.emotional_values, "label"),
           concerns: mergeStrings(current.concerns, result.concerns),
           latestEmotion: result.emotion || null,
