@@ -461,21 +461,45 @@ exports.saveTodo = functions.https.onRequest(async (req, res) => {
 // ===== 以下為新增：硬需求標籤、情緒價值標籤、情緒分析、回訪軍師 =====
 
 // 把這次對話的新標籤併入客戶原有的標籤
-// - 同一類別、同一內容的標籤：用新的取代舊的
-// - 只會有一個答案的類別（例如預算）：新的出現時，舊的整個換掉
+// - 業務員手動加的標籤（source: "manual"）永遠保留，AI 不能蓋掉
+// - 只會有一個答案的類別（例如預算）：有手動標籤時，AI 在這個類別的新標籤直接忽略
+// - 同一類別、同一內容的 AI 標籤：用新的取代舊的
+// - 只會有一個答案的類別：AI 的新標籤出現時，舊的 AI 標籤整個換掉
 // - 其他：新舊都保留
+// - 以前沒有 source 的舊資料，當成 AI 標籤處理
 const SINGLE_VALUE_CATEGORIES = ["預算", "購車時間", "付款方式", "舊車換購"];
 
 function mergeTags(oldTags, newTags, textField) {
-  const incoming = Array.isArray(newTags) ? newTags.filter((t) => t && t.category && t[textField]) : [];
+  const keyOf = (t) => `${t.category}|${t[textField]}`;
   const existing = Array.isArray(oldTags) ? oldTags : [];
-  const incomingKeys = new Set(incoming.map((t) => `${t.category}|${t[textField]}`));
+
+  // 業務員手動加的標籤：永遠保留，AI 不能蓋掉
+  const manualTags = existing.filter((t) => t && t.source === "manual");
+  const manualKeys = new Set(manualTags.map(keyOf));
+  // 單一答案類別（例如預算）只要有手動標籤，這個類別就由業務員決定
+  const lockedCategories = new Set(
+    manualTags.map((t) => t.category).filter((c) => SINGLE_VALUE_CATEGORIES.includes(c))
+  );
+
+  // 這次 AI 的新標籤：去掉格式不對的、跟手動標籤重複的、被鎖住類別的，並標記 source: "ai"
+  const incoming = (Array.isArray(newTags) ? newTags : [])
+    .filter((t) => t && t.category && t[textField])
+    .filter((t) => !manualKeys.has(keyOf(t)) && !lockedCategories.has(t.category))
+    .map((t) => ({ ...t, source: "ai" }));
+
+  const incomingKeys = new Set(incoming.map(keyOf));
   const replacedCategories = new Set(
     incoming.map((t) => t.category).filter((c) => SINGLE_VALUE_CATEGORIES.includes(c))
   );
+
+  // 舊標籤：手動的全留；AI 的（或沒有 source 的舊資料）照原本規則決定要不要被取代
   const kept = existing.filter(
-    (t) => !incomingKeys.has(`${t.category}|${t[textField]}`) && !replacedCategories.has(t.category)
+    (t) =>
+      t &&
+      (t.source === "manual" ||
+        (!incomingKeys.has(keyOf(t)) && !replacedCategories.has(t.category)))
   );
+
   return [...kept, ...incoming];
 }
 
