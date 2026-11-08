@@ -22,14 +22,17 @@ carsales-stt/
 ## 運作流程
 
 ```
-[App] 按錄音 ──► POST /sessions 建立一次錄音
+[App] 按錄音 ──► POST /conversations 建立一筆對話紀錄
    │ 每 20 秒切一段 m4a（16kHz 單聲道，約 160KB）
-   ├──► POST /sessions/:id/segments ──► 語音轉文字 ──► 繁體轉換 ──► 規則抓關鍵字
+   ├──► POST /conversations/:id/segments ──► 語音轉文字 ──► 繁體轉換 ──► 規則抓關鍵字
    │       ◄── 回傳該段文字 + 關鍵字（畫面上的「即時逐字稿」「即時偵測到」）
    │ 按停止，等所有段上傳完
-   └──► POST /sessions/:id/finalize ──► LLM 整理：修錯字、台語轉華語、
-           ◄── 區分業務/客戶、標籤、摘要、待確認項目（存回 Firestore）
+   └──► POST /conversations/:id/finalize ──► LLM 整理：修錯字、台語轉華語、
+           ◄── 區分業務/客戶、摘要、待確認項目（存回同一筆 conversations）
+   然後 functions 的 analyzeAfterConversation / analyzeInsight 帶同一個 conversationId 做 AI 分析與標籤
 ```
+
+> 資料格式、標籤類別、前端串接順序：見 [docs/conversations.md](../docs/conversations.md)
 
 為什麼用「分段上傳」而不是即時串流：Expo 不用寫原生模組就能做、網路斷了音檔還留在手機會自動補傳、
 後端用一般 REST API 即可。代價是延遲約 20～25 秒，對「記錄」這個用途已經足夠。
@@ -46,8 +49,9 @@ carsales-stt/
 | `openai` | gpt-4o-transcribe | 付費 | 國語英文較準，台語一樣弱 |
 | `breeze` | 自架 Breeze-ASR-26（聯發創新基地） | 免費（自己的電腦/Colab） | 台語明顯較佳，需要 GPU 或較慢的 CPU |
 | `hybrid` | 雲端 + breeze 都跑 | 看雲端用哪家 | 最準，LLM 合併兩份結果 |
+| `mock` | 模擬對話（不聽音檔） | 免費、不用金鑰 | 測試用，見下面「用模擬對話測試」 |
 
-文字整理（`LLM_PROVIDER`）：`gemini`（預設，免費額度）、`groq`（免費額度）、`openai`（付費）。
+文字整理（`LLM_PROVIDER`）：`gemini`（預設，免費額度）、`groq`（免費額度）、`openai`（付費）、`mock`（測試，不呼叫 AI）。
 三家都相容 OpenAI 的 API 寫法，切換只要改 `.env`，程式不用動（見 `src/providers.js`）。
 
 > 免費方案的注意事項：有每日次數上限（測試與 Demo 綽綽有餘）；Gemini 免費版的資料可能被 Google 用來改善產品，
@@ -70,10 +74,37 @@ carsales-stt/
 
 兩個都不需要綁信用卡。
 
+### 金鑰失效時（換新金鑰）
+
+症狀：API 回 **503**、`code: "API_KEY_INVALID"`，錯誤訊息會寫是哪一把（`GROQ_API_KEY` 或 `GEMINI_API_KEY`）。
+
+1. 到上面的網址建立新金鑰（舊的可以順手刪掉）
+2. 貼到 `stt-server/.env`；functions 的 Gemini 金鑰在 `functions/.env`，兩邊可以用同一把
+3. `npm run check:keys` 確認每把都是 ✓、模型名稱也找得到（functions 那邊跑 `npm run check:key`）
+4. 重新啟動 `npm run dev`；functions 要重新 `firebase deploy --only functions`
+
+金鑰只能放在 `.env`，不要寫進程式或貼到群組；git 會忽略 `.env`。
+
+> **Gemini 金鑰是 `AQ.` 開頭是正常的**：AI Studio 現在只發這種新格式（以前是 `AIza`）。
+> 新金鑰在 Gemini 的 OpenAI 相容端點可能不能用，所以 stt-server 的整理改成直接呼叫 Gemini 原生 API（`src/gemini.js`），functions 本來就是用官方 SDK，兩邊都能用 AQ. 金鑰。
+
+GitHub 上也能檢查：repo 的 **Settings → Secrets and variables → Actions** 新增 `GROQ_API_KEY`、`GEMINI_API_KEY`，
+到 **Actions → 測試與金鑰檢查 → Run workflow** 手動執行（每週一也會自動跑一次）。push 時只跑不需要金鑰的測試。
+
+### 用模擬對話測試（不需要真人錄音）
+
+```bash
+npm test                         # 單元測試：整個錄音流程、即時關鍵字、標籤類別兩邊一致（不需要金鑰、網路）
+npm run test:mock -- --offline   # 跑 src/mock/conversations.json 的模擬對話，不呼叫 AI
+npm run test:mock                # 同上，但用 .env 的 LLM（例如 Gemini）真的整理一次，結果存在 test-output/
+```
+
+App 端：`.env` 設 `STT_PROVIDER=mock` 後照常錄音上傳，後端會忽略音檔、依段落回傳模擬對話（再加 `LLM_PROVIDER=mock` 就完全不用金鑰）。
+
 ### 沒有前端時先測試
 
 ```bash
-cd backend
+cd stt-server
 npm install
 cp .env.example .env        # Windows 用 copy .env.example .env，再填入 GROQ_API_KEY、GEMINI_API_KEY
 npm run test:stt -- test.m4a          # 完整流程：轉文字 → 關鍵字 → LLM 整理
@@ -108,10 +139,10 @@ GEMINI_API_KEY=你的金鑰
 ### 後端 API 伺服器
 
 ```bash
-cd backend
+cd stt-server
 npm install
 cp .env.example .env        # 填入金鑰與 Firebase 設定
-# 把 Firebase 服務帳戶金鑰存成 backend/serviceAccountKey.json（記得加進 .gitignore！）
+# 把 Firebase 服務帳戶金鑰存成 stt-server/serviceAccountKey.json（記得加進 .gitignore！）
 npm run dev
 ```
 
@@ -119,10 +150,12 @@ API（都需要 `Authorization: Bearer <Firebase ID Token>`）：
 
 | 方法 | 路徑 | 說明 |
 |---|---|---|
-| POST | `/api/stt/sessions` | 開始錄音，body `{ customerId }`，回傳 `sessionId` |
-| POST | `/api/stt/sessions/:id/segments` | form-data：`audio`、`seq`、`startSec`、`durationSec` |
-| POST | `/api/stt/sessions/:id/finalize` | body `{ totalSegments, durationSec }`，回傳整理結果 |
-| GET  | `/api/stt/sessions/:id` | 讀取這次錄音的全部資料 |
+| POST | `/api/conversations` | 開始錄音，body `{ customerId, mockScript? }`，回傳 `conversationId` |
+| POST | `/api/conversations/:id/segments` | form-data：`audio`、`seq`、`startSec`、`durationSec` |
+| POST | `/api/conversations/:id/finalize` | body `{ totalSegments, durationSec }`，回傳整理結果與 `conversationText` |
+| GET  | `/api/conversations/:id` | 讀取這次對話的全部資料 |
+
+舊路徑 `/api/stt/sessions/...` 還能用（回應也有 `sessionId`，跟 `conversationId` 同一個值），前端改完再拿掉。
 
 ### App
 
@@ -159,7 +192,7 @@ uvicorn server:app --host 0.0.0.0 --port 8001
 - **說話者辨識**目前靠 LLM 依內容判斷，兩人語氣相近時可能分錯；之後可接 pyannote 等聲紋分離模型。
 - **切段處**偶爾會切到一個字的一半；之後可改成偵測到安靜時才切（VAD）。
 - **Android 省電機制**可能讓背景計時器變慢，結果只是那一段比較長，不會掉資料（單段上限 25MB，約 50 分鐘）。
-- **整理結果的 `labels`** 已存進 session，負責「硬需求 Agent / 情緒價值 Agent」的組員可以直接讀取，不用再從逐字稿重抓。
+- **標籤**：語音整理不再產生 `labels`，正式標籤統一由 functions 的 `analyzeInsight` 產生；錄音中的即時關鍵字類別也改成同一套（車款、預算、家庭…），見 docs/conversations.md。
 
 ## 個資與錄音同意（請務必處理）
 
@@ -167,6 +200,6 @@ uvicorn server:app --host 0.0.0.0 --port 8001
 
 - 錄音前要告知客戶並取得同意（畫面上已有提示，可再加勾選框留下紀錄）。
 - `serviceAccountKey.json`、`.env` 絕對不能 commit 上 GitHub。
-- Firestore / Storage Security Rules 要限制業務員只能讀自己的 `sessions`。
+- Firestore / Storage Security Rules 要限制業務員只能讀自己的 `conversations`（`salespersonId == request.auth.uid`）。
 - 若不需要保留原始音檔，把 `SAVE_AUDIO` 設成 `false`。
 - 計畫書 SWOT 的威脅提到隱私法規，口試時被問到可以用以上幾點回答。

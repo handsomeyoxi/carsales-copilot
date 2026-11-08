@@ -4,6 +4,8 @@ const admin = require("firebase-admin");
 const { FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { analyzeConversation, analyzeAfterConversation, generateQuotation } = require("./gemini");
 const { analyzeInsight, followUpAdvisor } = require("./advisor");
+const { mergeTags, mergeStrings, hardNeedsToNeeds } = require("./tags");
+const { SINGLE_VALUE_CATEGORIES, TAG_TEXT_FIELDS, CATEGORIES_BY_GROUP } = require("./tagCategories");
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -12,6 +14,27 @@ function setCORS(res) {
   res.set("Access-Control-Allow-Origin", "*");
   res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.set("Access-Control-Allow-Headers", "Content-Type");
+}
+
+// 錯誤回應：Gemini 金鑰失效時回 503 並講清楚，其他錯誤用原本的訊息
+function sendError(res, error, fallbackMessage) {
+  if (error && error.code === "API_KEY_INVALID") {
+    return res.status(503).json({ error: error.message, code: "API_KEY_INVALID" });
+  }
+  return res.status(500).json({ error: fallbackMessage });
+}
+
+// ===== 對話紀錄 conversations/{conversationId} =====
+// stt-server（錄音）和這裡（AI 分析）共用同一筆文件，欄位說明見 docs/conversations.md
+// - 錄音：stt-server 建立 → 分段轉文字 → 整理後寫入 conversationText，status = "transcribed"
+// - 分析：analyzeAfterConversation 帶 conversationId 就更新同一筆，status = "analyzed"
+//         沒帶 conversationId（例如直接貼文字）才新增一筆，source = "text"
+// 舊的前端會傳 sessionId，當成 conversationId 處理
+async function loadConversation(conversationId) {
+  if (!conversationId) return { ref: null, data: null };
+  const ref = db.collection("conversations").doc(conversationId);
+  const snap = await ref.get();
+  return snap.exists ? { ref, data: snap.data() } : { ref: null, data: null, missing: true };
 }
 
 
@@ -104,7 +127,7 @@ exports.analyzeConversation = functions.https.onRequest(async (req, res) => {
     return res.status(200).json({ success: true, brand, data: result });
   } catch (error) {
     console.error("analyzeConversation error:", error);
-    return res.status(500).json({ error: "AI 分析失敗，請稍後再試" });
+    return sendError(res, error, "AI 分析失敗，請稍後再試");
   }
 });
 
@@ -114,10 +137,26 @@ exports.analyzeAfterConversation = functions.https.onRequest(async (req, res) =>
   if (req.method === "OPTIONS") return res.status(204).send("");
 
   try {
-    const { conversationText, customerId, salespersonId, sessionId } = req.body;
+    const body = req.body || {};
+    const conversationId = body.conversationId || body.sessionId || null;
+    const conversation = await loadConversation(conversationId);
+    if (conversation.missing) {
+      return res.status(404).json({ error: "找不到這筆對話紀錄（conversationId）" });
+    }
+    const stored = conversation.data || {};
+
+    // 有 conversationId 時，逐字稿、客戶、業務員都可以從錄音那筆資料拿
+    const conversationText = body.conversationText || stored.conversationText;
+    const customerId = body.customerId || stored.customerId;
+    const salespersonId = body.salespersonId || stored.salespersonId || null;
 
     if (!conversationText || !customerId) {
-      return res.status(400).json({ error: "conversationText 和 customerId 是必填欄位" });
+      return res.status(400).json({
+        error: "需要 conversationText 和 customerId（或傳已轉好文字、已綁定客戶的 conversationId）",
+      });
+    }
+    if (stored.customerId && body.customerId && stored.customerId !== body.customerId) {
+      return res.status(400).json({ error: "customerId 和這筆對話紀錄綁定的客戶不一致" });
     }
 
     const customerRef = db.collection("customers").doc(customerId);
@@ -132,14 +171,20 @@ exports.analyzeAfterConversation = functions.https.onRequest(async (req, res) =>
 
     const timestamp = FieldValue.serverTimestamp();
 
-    const conversationRef = await db.collection("conversations").add({
+    const record = {
       customerId,
-      salespersonId: salespersonId || null,
-      sessionId: sessionId || null, // 對應 stt-server 的 sessions，之後合併時用
+      salespersonId,
       conversationText,
       analysis: result,
-      createdAt: timestamp,
-    });
+      status: "analyzed",
+      analyzedAt: timestamp,
+    };
+    let conversationRef = conversation.ref;
+    if (conversationRef) {
+      await conversationRef.set(record, { merge: true });
+    } else {
+      conversationRef = await db.collection("conversations").add({ ...record, source: "text", createdAt: timestamp });
+    }
 
     // 更新客戶：AI 判斷不出來的欄位不覆蓋舊值
     const customerUpdate = {
@@ -212,7 +257,7 @@ exports.analyzeAfterConversation = functions.https.onRequest(async (req, res) =>
     });
   } catch (error) {
     console.error("analyzeAfterConversation error:", error);
-    return res.status(500).json({ error: "AI 分析失敗，請稍後再試" });
+    return sendError(res, error, "AI 分析失敗，請稍後再試");
   }
 });
 
@@ -273,7 +318,7 @@ exports.generateQuotation = functions.https.onRequest(async (req, res) => {
     });
   } catch (error) {
     console.error("generateQuotation error:", error);
-    return res.status(500).json({ error: "報價單生成失敗，請稍後再試" });
+    return sendError(res, error, "報價單生成失敗，請稍後再試");
   }
 });
 
@@ -460,54 +505,6 @@ exports.saveTodo = functions.https.onRequest(async (req, res) => {
 
 // ===== 以下為新增：硬需求標籤、情緒價值標籤、情緒分析、回訪軍師 =====
 
-// 把這次對話的新標籤併入客戶原有的標籤
-// - 業務員手動加的標籤（source: "manual"）永遠保留，AI 不能蓋掉
-// - 只會有一個答案的類別（例如預算）：有手動標籤時，AI 在這個類別的新標籤直接忽略
-// - 同一類別、同一內容的 AI 標籤：用新的取代舊的
-// - 只會有一個答案的類別：AI 的新標籤出現時，舊的 AI 標籤整個換掉
-// - 其他：新舊都保留
-// - 以前沒有 source 的舊資料，當成 AI 標籤處理
-const SINGLE_VALUE_CATEGORIES = ["預算", "購車時間", "付款方式", "舊車換購"];
-
-function mergeTags(oldTags, newTags, textField) {
-  const keyOf = (t) => `${t.category}|${t[textField]}`;
-  const existing = Array.isArray(oldTags) ? oldTags : [];
-
-  // 業務員手動加的標籤：永遠保留，AI 不能蓋掉
-  const manualTags = existing.filter((t) => t && t.source === "manual");
-  const manualKeys = new Set(manualTags.map(keyOf));
-  // 單一答案類別（例如預算）只要有手動標籤，這個類別就由業務員決定
-  const lockedCategories = new Set(
-    manualTags.map((t) => t.category).filter((c) => SINGLE_VALUE_CATEGORIES.includes(c))
-  );
-
-  // 這次 AI 的新標籤：去掉格式不對的、跟手動標籤重複的、被鎖住類別的，並標記 source: "ai"
-  const incoming = (Array.isArray(newTags) ? newTags : [])
-    .filter((t) => t && t.category && t[textField])
-    .filter((t) => !manualKeys.has(keyOf(t)) && !lockedCategories.has(t.category))
-    .map((t) => ({ ...t, source: "ai" }));
-
-  const incomingKeys = new Set(incoming.map(keyOf));
-  const replacedCategories = new Set(
-    incoming.map((t) => t.category).filter((c) => SINGLE_VALUE_CATEGORIES.includes(c))
-  );
-
-  // 舊標籤：手動的全留；AI 的（或沒有 source 的舊資料）照原本規則決定要不要被取代
-  const kept = existing.filter(
-    (t) =>
-      t &&
-      (t.source === "manual" ||
-        (!incomingKeys.has(keyOf(t)) && !replacedCategories.has(t.category)))
-  );
-
-  return [...kept, ...incoming];
-}
-
-function mergeStrings(oldList, newList) {
-  const all = [...(Array.isArray(oldList) ? oldList : []), ...(Array.isArray(newList) ? newList : [])];
-  return [...new Set(all.filter((item) => typeof item === "string" && item.trim() !== ""))];
-}
-
 // 轉成台灣時區的日期字串，例如 2026-10-08
 function toTaipeiDate(date) {
   return date.toLocaleDateString("sv-SE", { timeZone: "Asia/Taipei" });
@@ -515,40 +512,6 @@ function toTaipeiDate(date) {
 
 function toDateString(timestamp) {
   return timestamp && timestamp.toDate ? toTaipeiDate(timestamp.toDate()) : null;
-}
-
-// 標籤種類 → 文字放在哪個欄位（硬需求用 value，情緒價值用 label）
-const TAG_TEXT_FIELDS = { hardNeeds: "value", emotionalValues: "label" };
-
-// 從「約 400 萬」「150–170 萬」抓出預算上限（萬元，取最大的數字），跟前端 parseBudgetMax 一樣
-function parseBudgetMax(text) {
-  const nums = (String(text).replace(/,/g, "").match(/\d+(\.\d+)?/g) || []).map(Number);
-  return nums.length ? Math.max(...nums) : null;
-}
-
-// 硬需求標籤 → 前端的 needs 格式
-// { lookingAt, budget, budgetMax, type, usage, features }
-// 同一類別有多個標籤時，手動的優先，其次是最新的（mergeTags 會把新的放在後面）
-function hardNeedsToNeeds(hardNeeds) {
-  const tags = (Array.isArray(hardNeeds) ? hardNeeds : []).filter(
-    (t) => t && typeof t.value === "string" && t.value.trim() !== ""
-  );
-  const valuesOf = (category) => {
-    const list = tags.filter((t) => t.category === category);
-    const manual = list.filter((t) => t.source === "manual");
-    const others = list.filter((t) => t.source !== "manual").reverse(); // 新的在前
-    return [...new Set([...manual, ...others].map((t) => t.value.trim()))];
-  };
-
-  const budget = valuesOf("預算")[0] || null;
-  return {
-    lookingAt: valuesOf("車款"),
-    budget,
-    budgetMax: budget ? parseBudgetMax(budget) : null,
-    type: valuesOf("車型")[0] || null,
-    usage: valuesOf("用途").join("、") || null,
-    features: [...valuesOf("配備"), ...valuesOf("顏色")],
-  };
 }
 
 
@@ -569,6 +532,11 @@ exports.saveCustomerTag = functions.https.onRequest(async (req, res) => {
     if (!textField) return res.status(400).json({ error: "type 只能是 hardNeeds 或 emotionalValues" });
     if (typeof category !== "string" || category.trim() === "") {
       return res.status(400).json({ error: "category 是必填欄位" });
+    }
+    if (!CATEGORIES_BY_GROUP[type].includes(category.trim())) {
+      return res.status(400).json({
+        error: `${type} 的 category 只能是：${CATEGORIES_BY_GROUP[type].join("、")}`,
+      });
     }
     if (typeof value !== "string" || value.trim() === "") {
       return res.status(400).json({ error: "value 不能是空的" });
@@ -621,20 +589,25 @@ exports.analyzeInsight = functions.https.onRequest(async (req, res) => {
   if (req.method === "OPTIONS") return res.status(204).send("");
 
   try {
-    const { conversationText, customerId, conversationId } = req.body;
+    const body = req.body || {};
+    const conversation = await loadConversation(body.conversationId || body.sessionId || null);
+    if (conversation.missing) {
+      return res.status(404).json({ error: "找不到這筆對話紀錄（conversationId）" });
+    }
+    const stored = conversation.data || {};
+    const conversationText = body.conversationText || stored.conversationText;
+    const customerId = body.customerId || stored.customerId || null;
 
     if (!conversationText) {
-      return res.status(400).json({ error: "conversationText 是必填欄位" });
+      return res.status(400).json({ error: "需要 conversationText（或已轉好文字的 conversationId）" });
     }
 
+    // advisor.js 已經用 normalizeInsight 整理過：類別一定在 tagCategories.js 的清單裡
     const result = await analyzeInsight(conversationText);
 
     // 有帶 conversationId 就把結果存回那筆對話紀錄
-    if (conversationId) {
-      await db.collection("conversations").doc(conversationId).set(
-        { insight: result },
-        { merge: true }
-      );
+    if (conversation.ref) {
+      await conversation.ref.set({ insight: result, insightAt: FieldValue.serverTimestamp() }, { merge: true });
     }
 
     // 有帶 customerId 就把新標籤併入客戶累積的標籤，並更新最新情緒
@@ -659,7 +632,7 @@ exports.analyzeInsight = functions.https.onRequest(async (req, res) => {
     return res.status(200).json({ success: true, data: result });
   } catch (error) {
     console.error("analyzeInsight error:", error);
-    return res.status(500).json({ error: "AI 分析失敗，請稍後再試" });
+    return sendError(res, error, "AI 分析失敗，請稍後再試");
   }
 });
 
@@ -681,19 +654,21 @@ exports.followUpAdvisor = functions.https.onRequest(async (req, res) => {
     ]);
 
     if (!customerDoc.exists) return res.status(404).json({ error: "找不到客戶資料" });
-    if (conversationsSnap.empty) {
-      return res.status(404).json({ error: "這位客戶還沒有對話紀錄，無法產生回訪建議" });
-    }
 
     // 在程式裡排序（由新到舊），只取最近 5 筆，這樣不用另外建 Firestore 複合索引
+    // 只錄音、還沒分析的對話沒有內容可以參考，先排除
     const conversations = conversationsSnap.docs
       .map((doc) => doc.data())
+      .filter((c) => c.analysis || c.insight)
       .sort((a, b) => {
         const aTime = a.createdAt && a.createdAt.toMillis ? a.createdAt.toMillis() : 0;
         const bTime = b.createdAt && b.createdAt.toMillis ? b.createdAt.toMillis() : 0;
         return bTime - aTime;
       })
       .slice(0, 5);
+    if (conversations.length === 0) {
+      return res.status(404).json({ error: "這位客戶還沒有分析過的對話紀錄，無法產生回訪建議" });
+    }
 
     // 只把分析結果交給 AI，不送完整逐字稿，節省免費額度
     const history = conversations.map((c) => ({
@@ -734,6 +709,6 @@ exports.followUpAdvisor = functions.https.onRequest(async (req, res) => {
     return res.status(200).json({ success: true, data: result });
   } catch (error) {
     console.error("followUpAdvisor error:", error);
-    return res.status(500).json({ error: "回訪建議生成失敗，請稍後再試" });
+    return sendError(res, error, "回訪建議生成失敗，請稍後再試");
   }
 });
