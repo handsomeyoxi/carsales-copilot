@@ -1,11 +1,13 @@
 // 全 App 共用的狀態：客戶、待辦、錄音同意、標籤驗證、詞庫、CRM、新手引導、AI 助理對話
 // 任何頁面都用 useCustomers() 拿資料和操作函式
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
+import * as api from '../api';
 import {
   initialConsents,
   initialCustomers,
   initialTodos,
   initialVocabulary,
+  followUps as mockFollowUps,
   salesperson,
   transcript,
 } from '../data/mockData';
@@ -22,6 +24,37 @@ function nowText() {
 export function CustomerProvider({ children }) {
   const [customers, setCustomers] = useState(initialCustomers);
   const [todos, setTodos] = useState(initialTodos);
+  const [followUps, setFollowUps] = useState(mockFollowUps);
+
+  // ---- 從後端載入資料 ----
+  // dataSource：'mock' 假資料（還沒載入、載入失敗或 USE_MOCK）/ 'api' 後端資料
+  // 載入失敗時保留假資料，畫面不會空掉，錯誤放在 loadError 給畫面顯示
+  const [dataSource, setDataSource] = useState('mock');
+  const [loading, setLoading] = useState(!api.USE_MOCK);
+  const [loadError, setLoadError] = useState(null);
+
+  async function reload() {
+    if (api.USE_MOCK) return;
+    setLoading(true);
+    try {
+      const data = await api.fetchDashboard();
+      setCustomers(data.customers);
+      setTodos(data.todos);
+      setFollowUps(data.followUps);
+      setDataSource('api');
+      setLoadError(null);
+    } catch (error) {
+      console.warn('載入後端資料失敗，先用假資料：', error.message);
+      setLoadError(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    reload();
+  }, []);
+
   const [consents, setConsents] = useState(initialConsents);
   // 進行中的錄音：{ customerId, consentTime, startedAt, pausedAt, pausedMs, lines, marks }
   // 存在這裡（而不是錄音頁裡），所以錄音畫面「縮小」離開再回來，時間和逐字稿都還在
@@ -85,13 +118,32 @@ export function CustomerProvider({ children }) {
   }
 
   // ---- 待辦 ----
+  // 畫面先改（感覺比較快），再存到後端；存失敗就改回來
   function toggleTodo(id) {
-    setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+    const todo = todos.find((t) => t.id === id);
+    if (!todo) return;
+    const done = !todo.done;
+    setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done } : t)));
+    if (dataSource !== 'api') return;
+    api.saveTodo({ id, done }).catch((error) => {
+      console.warn('待辦儲存失敗：', error.message);
+      setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: !done } : t)));
+    });
   }
   // 自己新增待辦：{ task, date: 'YYYY-MM-DD', time, customerId, priority }
+  // 先用暫時的 id 顯示，後端存好後換成真正的 id
   function addTodo(todo) {
     const newTodo = { id: 'td' + Date.now(), priority: 'medium', time: '', customerId: null, done: false, ...todo };
     setTodos((prev) => [...prev, newTodo]);
+    if (dataSource === 'api') {
+      api
+        .saveTodo({ ...newTodo, id: undefined })
+        .then((saved) => setTodos((prev) => prev.map((t) => (t.id === newTodo.id ? saved : t))))
+        .catch((error) => {
+          console.warn('新增待辦失敗：', error.message);
+          setTodos((prev) => prev.filter((t) => t.id !== newTodo.id));
+        });
+    }
     return newTodo;
   }
 
@@ -184,6 +236,11 @@ export function CustomerProvider({ children }) {
         todos,
         toggleTodo,
         addTodo,
+        followUps,
+        dataSource,
+        loading,
+        loadError,
+        reload,
         chat,
         addChatMessage,
         consents,
