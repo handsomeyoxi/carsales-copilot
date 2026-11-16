@@ -236,6 +236,24 @@ export function CustomerProvider({ children }) {
   function reviewTag(tagId, status, value) {
     setTagReviews((prev) => ({ ...prev, [tagId]: { status, value } }));
   }
+  // AI 摘要頁的「✓ 正確」「✎ 修正」：畫面先顯示已確認，再存到後端（source: manual，之後 AI 不會蓋掉）
+  // tag 來自 api.toAnalysis；存好後用後端回傳的標籤更新這位客戶；失敗就把畫面改回來
+  function reviewCustomerTag(customerId, tag, status, value) {
+    reviewTag(tag.id, status, value);
+    if (dataSource !== 'api') return;
+    api
+      .saveCustomerTag(customerId, tag, value)
+      .then(({ customerId: _id, ...saved }) =>
+        setCustomers((prev) => prev.map((c) => (c.id === customerId ? api.toCustomer({ ...c, ...saved }) : c)))
+      )
+      .catch((error) => {
+        console.warn('標籤儲存失敗：', error.message);
+        setTagReviews((prev) => {
+          const { [tag.id]: _removed, ...rest } = prev;
+          return rest;
+        });
+      });
+  }
 
   // ---- 專有名詞詞庫 ----
   function addTerm(term) {
@@ -284,6 +302,7 @@ export function CustomerProvider({ children }) {
         revokeConsent,
         tagReviews,
         reviewTag,
+        reviewCustomerTag,
         vocabulary,
         addTerm,
         removeTerm,
