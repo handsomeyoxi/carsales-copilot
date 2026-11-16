@@ -64,12 +64,18 @@ async function main() {
   }
 
   // 4. AI 分析：只帶 conversationId，逐字稿和客戶由 functions 從同一筆對話紀錄讀
-  console.log('\n4. 呼叫 analyzeAfterConversation…');
-  const analysis = await call(`${FUNCTIONS_URL}/analyzeAfterConversation`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conversationId }),
-  });
+  // 前端錄完也是同時呼叫這兩個：成交分析（analyzeAfterConversation）＋標籤（analyzeInsight）
+  console.log('\n4. 呼叫 analyzeAfterConversation、analyzeInsight…');
+  const post = (name) =>
+    call(`${FUNCTIONS_URL}/${name}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId }),
+    });
+  const [analysis, insight] = await Promise.all([post('analyzeAfterConversation'), post('analyzeInsight')]);
+  const tags = insight.data;
+  console.log(`   硬需求標籤：${(tags.hard_needs || []).map((t) => `${t.category}:${t.value}`).join('、')}`);
+  console.log(`   情緒價值標籤：${(tags.emotional_values || []).map((t) => `${t.category}:${t.label}`).join('、')}`);
   const a = analysis.data;
   console.log(`   摘要重點：${(a.summary?.key_points || []).join('、')}`);
   console.log(`   階段：${a.lifecycle_stage?.stage}、成交機率：${a.close_probability?.percentage}%`);

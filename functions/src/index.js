@@ -192,6 +192,14 @@ exports.analyzeConversation = functions.runWith({ timeoutSeconds: 300 }).https.o
       latestConversationId: conversationRef.id,
       closeAnalysis: result.close_probability,
       competitorComparison: result.competitor_comparison,
+      // AI 摘要頁用：最近一次對話的重點、生命週期判斷理由（不用另外再查 conversations）
+      latestAnalysis: {
+        conversationId: conversationRef.id,
+        analyzedAt: new Date().toISOString(),
+        durationSec: Number(stored.durationSec) || null,
+        summary: result.summary,
+        lifecycle: result.lifecycle_stage,
+      },
     };
     if (salespersonId && !(customerHistory && customerHistory.salespersonId)) {
       customerUpdate.salespersonId = salespersonId;
@@ -636,6 +644,8 @@ exports.saveCustomerTag = functions.runWith({ timeoutSeconds: 300 }).https.onReq
       category: cat,
       [textField]: text,
       source: "manual",
+      // 業務員是確認 AI 的標籤，還是改過內容（AI 摘要頁算標籤正確率用）
+      review: oldValue !== undefined && oldValue !== text ? "edited" : "confirmed",
       // 陣列裡不能放 serverTimestamp，所以用字串時間
       updatedAt: new Date().toISOString(),
     };
