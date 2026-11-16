@@ -1,0 +1,37 @@
+name: 測試與金鑰檢查
+on:
+  push:
+  pull_request:
+  workflow_dispatch:      # Actions 頁面可以手動按「Run workflow」
+  schedule:
+    - cron: '0 1 * * 1'   # 每週一 09:00（台灣時間）檢查金鑰有沒有失效
+
+jobs:
+  test:                   # 不需要金鑰，每次 push / PR 都跑
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: stt-server 單元測試＋模擬對話
+        working-directory: stt-server
+        run: npm ci && npm test && npm run test:mock -- --offline
+      - name: functions 單元測試
+        working-directory: functions
+        run: npm ci && npm test
+
+  check-keys:             # 需要 repo Secrets 的 GROQ_API_KEY、GEMINI_API_KEY，只在手動執行或排程時跑
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 檢查金鑰
+        working-directory: stt-server
+        run: npm ci && npm run check:keys
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

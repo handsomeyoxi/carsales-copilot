@@ -2,3 +2,5 @@
 node_modules/
 serviceAccountKey.json
 *.m4a
+test-output/
+*.result.json

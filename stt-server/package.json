@@ -7,10 +7,13 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test:stt": "node scripts/test-local.js"
+    "test": "node --test \"test/*.test.js\"",
+    "test:mock": "node scripts/test-mock.js",
+    "test:stt": "node scripts/test-local.js",
+    "check:keys": "node scripts/check-keys.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "cors": "^2.8.5",

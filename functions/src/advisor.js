@@ -2,6 +2,16 @@
 // 與 gemini.js 分開放，避免兩個人同時改同一個檔案。
 // askGemini（JSON 模式＋自動重試）已搬到共用的 ai.js，gemini.js 也用同一個
 const { askGemini } = require("./ai");
+const { HARD_NEED_CATEGORIES, EMOTIONAL_VALUE_CATEGORIES } = require("./tagCategories");
+const { normalizeInsight } = require("./tags");
+
+// 情緒價值每個類別的說明（類別清單本身在 tagCategories.js，兩邊要對得上）
+const EMOTIONAL_VALUE_HINTS = {
+  家庭: "與家人有關的在意點，例如小孩安全、長輩上下車、伴侶的意見",
+  時間: "與時間有關的在意點，例如急著用車、通勤太久、沒空保養、在意交車期",
+  心理: "與個人感受有關的在意點，例如怕買貴、怕後悔、想要安全感、在意面子或品牌",
+  嗜好: "客戶的興趣與生活話題，例如喜歡紅酒、露營、支持哪支球隊，回訪時可以拿來破冰",
+};
 
 // 功能一：從單次對話抓出「硬需求標籤」「情緒價值標籤」與「客戶情緒」
 async function analyzeInsight(conversationText) {
@@ -15,13 +25,11 @@ ${conversationText}
 【要整理的內容】
 一、硬需求標籤（hard_needs）：客戶對車子本身的具體條件。
 category 只能是以下其中之一：
-車款、車型、顏色、預算、配備、用途、購車時間、付款方式、舊車換購、決策者、其他
+${HARD_NEED_CATEGORIES.join("、")}
 
 二、情緒價值標籤（emotional_values）：客戶買車背後在意的感受與動機。
-category 只能是以下三種之一：
-- 家庭：與家人有關的在意點，例如小孩安全、長輩上下車、伴侶的意見
-- 時間：與時間有關的在意點，例如急著用車、通勤太久、沒空保養、在意交車期
-- 心理：與個人感受有關的在意點，例如怕買貴、怕後悔、想要安全感、在意面子或品牌
+category 只能是以下其中之一：
+${EMOTIONAL_VALUE_CATEGORIES.map((c) => `- ${c}：${EMOTIONAL_VALUE_HINTS[c] || ""}`).join("\n")}
 
 三、顧慮（concerns）：客戶擔心或猶豫的點。
 
@@ -68,7 +76,8 @@ category 只能是以下三種之一：
 interest_level 為 1 到 5 的整數：1 = 只是看看，3 = 有興趣但還在比較，5 = 非常想買。
 `.trim();
 
-  return askGemini(prompt);
+  // 類別不在清單、信心太低、少欄位的標籤在這裡整理掉，存進 Firestore 的格式一定一致
+  return normalizeInsight(await askGemini(prompt));
 }
 
 // 功能二：回訪軍師，根據這位客戶累積的所有紀錄給三段話術與避免重提清單

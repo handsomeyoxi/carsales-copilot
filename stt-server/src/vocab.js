@@ -5,7 +5,7 @@
  *    用繁體中文撰寫，也能讓模型傾向輸出繁體。
  * 2. detectKeywords()：每段轉寫完成後立刻用規則比對，
  *    對應 App 畫面上的「即時偵測到」標籤（不花 LLM 費用、零延遲）。
- *    錄音結束後的「整理」才交給 LLM 做完整分析。
+ *    類別和 AI 的硬需求／情緒價值標籤是同一套（tagCategories.js）。
  */
 
 export const CAR_MODELS = [
@@ -33,28 +33,69 @@ export const STT_HINT =
   '配備：ADAS、CarPlay、360環景、電動尾門。試乘、交車、頭期款、月付、預產期。';
 
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const listRegex = (list) => new RegExp(list.map(escape).join('|'), 'gi');
+// 前後不能接英數字，避免「iX」吃到「Mix」、「X1」吃到「iX1」的一半
+const listRegex = (list) =>
+  new RegExp(`(?<![A-Za-z0-9])(?:${list.map(escape).join('|')})(?![A-Za-z0-9])`, 'gi');
 
+/**
+ * 即時關鍵字規則：類別跟 AI 標籤是同一套（見 tagCategories.js）
+ *   group = 'hardNeeds'（硬需求）或 'emotionalValues'（情緒價值）
+ * 這裡只是「提示」：規則抓得到字，抓不到語意。正式的標籤由錄音結束後的 AI 分析（functions 的 analyzeInsight）產生。
+ */
 const RULES = [
-  { type: 'brand', regex: listRegex(BRANDS) },
-  { type: 'model', regex: listRegex(CAR_MODELS) },
-  { type: 'feature', regex: listRegex(FEATURES) },
+  { group: 'hardNeeds', category: '車款', regex: listRegex([...BRANDS, ...CAR_MODELS]) },
+  { group: 'hardNeeds', category: '車型', regex: /(SUV|休旅車?|轎車|掀背車?|旅行車|MPV|七人座|五人座|跑車)/gi },
+  { group: 'hardNeeds', category: '配備', regex: listRegex([...FEATURES, 'ISOFIX', '安全座椅']) },
   // 預算：170萬、150到170萬、一百五十萬
-  { type: 'budget', regex: /(\d{2,4}\s*(?:[-~到至]\s*\d{2,4}\s*)?萬|[一二三四五六七八九十百兩]+萬)(?:左右|以內|上下)?/g },
-  { type: 'color', regex: /[白黑灰銀紅藍綠棕金]色/g },
-  { type: 'family', regex: /(太太|老婆|先生|老公|小孩|囡仔|兒子|女兒|寶寶|懷孕|預產期|坐月子|月子|爸媽|長輩|狗|貓|寵物)/g },
-  { type: 'time', regex: /(下個?月|下禮拜|下週|月底|年底|過年前|月中|\d{1,2}月\d{1,2}[日號]?|\d{1,2}月)/g },
-  { type: 'hobby', regex: /(紅酒|威士忌|咖啡|露營|釣魚|高爾夫|爬山|棒球|中信兄弟|統一獅|樂天桃猿|富邦悍將|味全龍|台鋼雄鷹)/g },
+  {
+    group: 'hardNeeds',
+    category: '預算',
+    regex: /(\d{2,4}\s*(?:[-~到至]\s*\d{2,4}\s*)?萬|[一二三四五六七八九十百兩]+萬)(?:左右|以內|上下)?/g,
+  },
+  { group: 'hardNeeds', category: '顏色', regex: /[白黑灰銀紅藍綠棕金]色/g },
+  { group: 'hardNeeds', category: '用途', regex: /(通勤|上下班|接送|載小孩|載爸媽|載長輩|出遊|露營|跑長途|載貨|商務)/g },
+  {
+    group: 'hardNeeds',
+    category: '購車時間',
+    regex: /(下個?月|下禮拜|下週|月底|年底|過年前|月中|\d{1,2}月\d{1,2}[日號]?|\d{1,2}月)/g,
+  },
+  { group: 'hardNeeds', category: '付款方式', regex: /(分期|貸款|零利率|頭期款?|月付|現金|付清)/g },
+  { group: 'hardNeeds', category: '舊車換購', regex: /(舊車|換購|估車|折抵|中古車|二手車)/g },
+  {
+    group: 'hardNeeds',
+    category: '決策者',
+    regex: /(要問(?:我|一下)?(?:太太|老婆|老公|爸媽|家人)|(?:太太|老婆|老公|爸媽)(?:決定|說了算|點頭|同意))/g,
+  },
+  // 「先生」不放：業務常用「陳先生」稱呼客戶，會誤判
+  {
+    group: 'emotionalValues',
+    category: '家庭',
+    regex: /(太太|老婆|老公|小孩|囡仔|兒子|女兒|寶寶|懷孕|預產期|坐月子|月子|爸媽|長輩|寵物|狗|貓)/g,
+  },
+  {
+    group: 'emotionalValues',
+    category: '嗜好',
+    regex: /(紅酒|威士忌|咖啡|釣魚|高爾夫|爬山|棒球|中信兄弟|統一獅|樂天桃猿|富邦悍將|味全龍|台鋼雄鷹)/g,
+  },
 ];
 
-/** 回傳 [{ type, value }]，同類型同值只留一個 */
+/** 回傳 [{ group, category, value }]，同類別同值只留一個 */
 export function detectKeywords(text) {
   const found = new Map();
-  for (const { type, regex } of RULES) {
-    for (const m of text.matchAll(regex)) {
+  for (const { group, category, regex } of RULES) {
+    for (const m of String(text ?? '').matchAll(regex)) {
       const value = m[0].trim();
-      found.set(`${type}:${value.toLowerCase()}`, { type, value });
+      found.set(`${category}:${value.toLowerCase()}`, { group, category, value });
     }
+  }
+  return [...found.values()];
+}
+
+/** 合併多段的關鍵字（去重複），存在對話紀錄上給前端顯示 */
+export function mergeKeywords(lists) {
+  const found = new Map();
+  for (const list of lists) {
+    for (const k of list ?? []) found.set(`${k.category}:${String(k.value).toLowerCase()}`, k);
   }
   return [...found.values()];
 }

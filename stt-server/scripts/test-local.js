@@ -5,7 +5,9 @@
  *   node scripts/test-local.js 錄音檔.m4a
  *   node scripts/test-local.js 錄音檔.m4a --raw     （只轉文字，不做 LLM 整理，比較省錢）
  *
- * 需要：backend/.env 裡有 GROQ_API_KEY（語音轉文字）和 GEMINI_API_KEY（文字整理），兩個都免費
+ * 需要：stt-server/.env 裡有 GROQ_API_KEY（語音轉文字）和 GEMINI_API_KEY（文字整理），兩個都免費
+ * ⚠️ 只用自己或組員錄的模擬對話測試，不要用真實客戶錄音（免費版 Gemini 的資料可能被用來改善產品）
+ *    不想錄音的話用 npm run test:mock（直接用文字模擬對話）
  * 支援格式：m4a、mp3、wav、webm、mp4（單檔 25MB 以內，約 20 分鐘以上的錄音請先剪短）
  * 結果會印在終端機，並存成同檔名的 .result.json
  */
@@ -32,7 +34,7 @@ const llmName = process.env.LLM_PROVIDER || 'gemini';
 const keyOf = { groq: 'GROQ_API_KEY', gemini: 'GEMINI_API_KEY', openai: 'OPENAI_API_KEY' };
 for (const name of [sttName, rawOnly ? null : llmName]) {
   if (keyOf[name] && !process.env[keyOf[name]]) {
-    console.log(`請先在 backend/.env 填入 ${keyOf[name]}（目前設定使用 ${name}）`);
+    console.log(`請先在 stt-server/.env 填入 ${keyOf[name]}（目前設定使用 ${name}）`);
     process.exit(1);
   }
 }
@@ -60,7 +62,7 @@ if (candidates) {
 // 2. 規則式關鍵字（App 上的「即時偵測到」）
 const keywords = detectKeywords(text);
 console.log(`\n${line}\n【2. 即時偵測關鍵字】\n${line}`);
-console.log(keywords.length ? keywords.map((k) => `${k.type}：${k.value}`).join('\n') : '（無）');
+console.log(keywords.length ? keywords.map((k) => `${k.category}：${k.value}`).join('\n') : '（無）');
 
 const output = { file: path.basename(file), text, candidates, keywords };
 
@@ -77,7 +79,6 @@ if (!rawOnly && text) {
     if (u.original) console.log(`      （原話：${u.original}）`);
   }
   console.log(`\n【摘要】\n${organized.summary}`);
-  console.log(`\n【標籤】\n${organized.labels.map((l) => `${l.type}：${l.value}（${l.confidence}）`).join('\n')}`);
   if (organized.uncertain.length) {
     console.log(`\n【需要確認】\n${organized.uncertain.map((u) => `⚠ ${u}`).join('\n')}`);
   }

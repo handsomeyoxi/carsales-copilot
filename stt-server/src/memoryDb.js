@@ -1,6 +1,6 @@
 /**
  * 本機測試用的「假 Firestore」：資料只存在記憶體，伺服器關掉就消失。
- * 只實作 routes/sessions.js 會用到的功能，讓沒有 Firebase 帳號的人也能把語音 API 跑起來。
+ * 只實作 conversations.js 會用到的功能，讓沒有 Firebase 帳號的人也能把語音 API 跑起來。
  * 只在 .env 設 USE_MEMORY_DB=true 時才會用到，正式環境請用真的 Firestore。
  */
 

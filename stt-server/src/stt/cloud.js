@@ -1,5 +1,4 @@
-import { toFile } from 'openai';
-import { getProvider } from '../providers.js';
+import { getProvider, callProvider } from '../providers.js';
 
 /**
  * 用雲端 Whisper 類模型轉寫一段音檔（groq 免費 / openai 付費）
@@ -9,10 +8,11 @@ import { getProvider } from '../providers.js';
  * @param {string} prompt       提示詞：領域詞彙 + 上一段的結尾文字
  */
 export async function transcribeCloud(providerName, buffer, filename, prompt) {
-  const { client, sttModel } = getProvider(providerName);
+  const { client, sttModel } = await getProvider(providerName);
   if (!sttModel) throw new Error(`${providerName} 不提供語音轉文字`);
+  const { toFile } = await import('openai');
 
-  const res = await client.audio.transcriptions.create({
+  const res = await callProvider(providerName, async () => client.audio.transcriptions.create({
     file: await toFile(buffer, filename),
     model: process.env.STT_MODEL || sttModel,
     // 指定 zh 可避免整段被判成英文；英文單字仍會照原樣保留
@@ -20,6 +20,6 @@ export async function transcribeCloud(providerName, buffer, filename, prompt) {
     prompt,
     response_format: 'json',
     temperature: 0,
-  });
+  }));
   return res.text ?? '';
 }

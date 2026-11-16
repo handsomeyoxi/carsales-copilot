@@ -14,6 +14,9 @@
   "scripts": {
     "serve": "firebase emulators:start --only functions",
     "deploy": "firebase deploy --only functions",
-    "check": "node --check src/index.js && node --check src/gemini.js && node --check src/ai.js && node --check src/advisor.js"
+    "check": "node --check src/index.js && node --check src/gemini.js && node --check src/ai.js && node --check src/advisor.js && node --check src/tags.js && node --check src/tagCategories.js",
+    "test": "node --test \"test/*.test.js\"",
+    "test:mock": "node scripts/test-mock.js",
+    "check:key": "node scripts/check-key.js"
   }
 }

@@ -26,6 +26,26 @@ function safeParseJSON(text) {
   return JSON.parse(cleaned);
 }
 
+// 金鑰錯誤：Gemini 會回 400（API key not valid / API key expired）或 401、403。
+// 這種錯誤重試沒用，直接丟出 code = "API_KEY_INVALID"，index.js 會回 503 並把訊息給前端
+function isKeyError(error) {
+  const message = String((error && error.message) || "");
+  return (
+    (error && (error.status === 401 || error.status === 403)) ||
+    /API_KEY_INVALID|API key not valid|API key expired|API_KEY_EXPIRED|ACCESS_TOKEN_TYPE_UNSUPPORTED|PERMISSION_DENIED/i.test(message)
+  );
+}
+
+function keyError(cause) {
+  const error = new Error(
+    "GEMINI_API_KEY 無效或已失效：請到 https://aistudio.google.com/apikey 建立新金鑰，" +
+      "更新 functions/.env 後重新部署（本機可先跑 npm run check:key 確認）"
+  );
+  error.code = "API_KEY_INVALID";
+  error.cause = cause;
+  return error;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -42,6 +62,7 @@ async function askGemini(prompt, { temperature = 0.2 } = {}) {
       const result = await model.generateContent(prompt);
       return safeParseJSON(result.response.text());
     } catch (error) {
+      if (isKeyError(error)) throw keyError(error);
       const canRetry = RETRY_STATUS.includes(error.status) && attempt < RETRY_WAIT_MS.length;
       if (!canRetry) throw error;
       console.warn(`Gemini 回應 ${error.status}，${RETRY_WAIT_MS[attempt] / 1000} 秒後重試（第 ${attempt + 1} 次）`);
@@ -50,4 +71,4 @@ async function askGemini(prompt, { temperature = 0.2 } = {}) {
   }
 }
 
-module.exports = { askGemini, MODEL };
+module.exports = { askGemini, MODEL, isKeyError };
