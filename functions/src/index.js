@@ -106,7 +106,7 @@ function computeQuotation(car, { optionItems = [], discount } = {}) {
 }
 
 
-exports.analyzeConversation = functions.https.onRequest(async (req, res) => {
+exports.analyzeConversation = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
@@ -132,7 +132,7 @@ exports.analyzeConversation = functions.https.onRequest(async (req, res) => {
 });
 
 
-exports.analyzeAfterConversation = functions.https.onRequest(async (req, res) => {
+  exports.analyzeAfterConversation = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
@@ -262,7 +262,7 @@ exports.analyzeAfterConversation = functions.https.onRequest(async (req, res) =>
 });
 
 
-exports.generateQuotation = functions.https.onRequest(async (req, res) => {
+exports.generateQuotation = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
@@ -323,7 +323,7 @@ exports.generateQuotation = functions.https.onRequest(async (req, res) => {
 });
 
 
-exports.getDashboard = functions.https.onRequest(async (req, res) => {
+exports.getDashboard = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
@@ -386,7 +386,7 @@ exports.getDashboard = functions.https.onRequest(async (req, res) => {
 
 
 // 業務員註冊／修改資料：存 salespersons/{uid}，brand 決定推薦哪個品牌的車
-exports.saveSalesperson = functions.https.onRequest(async (req, res) => {
+exports.saveSalesperson = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
@@ -420,7 +420,7 @@ exports.saveSalesperson = functions.https.onRequest(async (req, res) => {
 
 // 業務員手動改客戶狀態：標記 statusSource = manual，之後 AI 分析就不會蓋掉
 // 傳 status: null 代表「交還給 AI 判斷」
-exports.updateCustomerStatus = functions.https.onRequest(async (req, res) => {
+exports.updateCustomerStatus = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
@@ -453,7 +453,7 @@ exports.updateCustomerStatus = functions.https.onRequest(async (req, res) => {
 const TEMPERATURES = ["hot", "warm", "cold"];
 const CUSTOMER_TEXT_FIELDS = ["phone", "source", "note", "interestedCar"];
 
-exports.saveCustomer = functions.https.onRequest(async (req, res) => {
+exports.saveCustomer = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
@@ -518,7 +518,7 @@ exports.saveCustomer = functions.https.onRequest(async (req, res) => {
 });
 // 業務員自己新增或修改待辦（和 AI 產生的待辦放在同一個 todos collection）
 // 沒帶 id = 新增；帶 id = 修改（例如打勾完成、改日期）
-exports.saveTodo = functions.https.onRequest(async (req, res) => {
+exports.saveTodo = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
@@ -590,7 +590,7 @@ function toDateString(timestamp) {
 // - 確認 AI 的標籤：value = 原本的內容
 // - 修正 AI 的標籤：oldValue = 原本的內容，value = 改過的內容
 // - 新增：不帶 oldValue
-exports.saveCustomerTag = functions.https.onRequest(async (req, res) => {
+exports.saveCustomerTag = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
@@ -654,7 +654,7 @@ exports.saveCustomerTag = functions.https.onRequest(async (req, res) => {
 });
 
 
-exports.analyzeInsight = functions.https.onRequest(async (req, res) => {
+exports.analyzeInsight = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 
@@ -707,7 +707,7 @@ exports.analyzeInsight = functions.https.onRequest(async (req, res) => {
 });
 
 
-exports.followUpAdvisor = functions.https.onRequest(async (req, res) => {
+exports.followUpAdvisor = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
 

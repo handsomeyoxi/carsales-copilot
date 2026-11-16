@@ -71,7 +71,7 @@ async function main() {
     body: JSON.stringify({ conversationId }),
   });
   const a = analysis.data;
-  console.log(`   摘要：${a.summary}`);
+  console.log(`   摘要重點：${(a.summary?.key_points || []).join('、')}`);
   console.log(`   階段：${a.lifecycle_stage?.stage}、成交機率：${a.close_probability?.percentage}%`);
   console.log(`   待辦：${(a.todos || []).map((t) => t.task).join('、')}`);
   console.log('\n✅ 錄音 → 轉文字 → AI 分析 全部接通');
