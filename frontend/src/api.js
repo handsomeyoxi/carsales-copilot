@@ -140,7 +140,67 @@ export async function saveCustomer({ id, name, phone, source, temperature, note,
 export async function updateCustomerStatus(customerId, status) {
   await request('updateCustomerStatus', { body: { customerId, status } });
 }
+// ---- AI 摘要頁（summary.js）----
 
+// 客戶資料（後端格式）→ AI 摘要頁用的格式（跟 mockData 的 analysis[id] 一樣，畫面就不用大改）
+// 還沒有任何 AI 分析結果的客戶回傳 null
+export function toAnalysis(c) {
+  if (!c) return null;
+  const hardNeeds = Array.isArray(c.hardNeeds) ? c.hardNeeds : [];
+  const emotional = Array.isArray(c.emotionalValues) ? c.emotionalValues : [];
+  const close = c.closeAnalysis || {};
+  const latest = c.latestAnalysis || {};
+  if (hardNeeds.length === 0 && emotional.length === 0 && !c.closeAnalysis) return null;
+
+  // 後端的信心值是 0~100，畫面用 0~1
+  const tagOf = (type, t, text) => ({
+    id: `${type}|${t.category}|${text}`,
+    type, // hardNeeds / emotionalValues，存檔時要傳給後端
+    label: t.category,
+    value: text,
+    confidence: Number.isFinite(Number(t.confidence)) ? Number(t.confidence) / 100 : 0.5,
+    evidence: t.evidence || '',
+    // 業務員確認或修正過的標籤（source: manual）
+    review: t.source === 'manual' ? { status: t.review || 'confirmed', value: text } : null,
+  });
+
+  const analyzedAt = latest.analyzedAt ? new Date(latest.analyzedAt) : null;
+  const pad = (n) => String(n).padStart(2, '0');
+  const sec = Number(latest.durationSec) || 0;
+
+  return {
+    recordedAt: analyzedAt
+      ? `${analyzedAt.getMonth() + 1}/${pad(analyzedAt.getDate())} ${pad(analyzedAt.getHours())}:${pad(analyzedAt.getMinutes())}`
+      : null,
+    duration: sec ? `${Math.floor(sec / 60)} 分 ${sec % 60} 秒` : null,
+    asrConfidence: null,
+    summary: (latest.summary && latest.summary.key_points) || [],
+    hard: hardNeeds.filter((t) => t && t.value).map((t) => tagOf('hardNeeds', t, t.value)),
+    emotion: emotional.filter((t) => t && t.label).map((t) => tagOf('emotionalValues', t, t.label)),
+    lifecycle: {
+      stage: c.lifecycleStage || (latest.lifecycle && latest.lifecycle.stage) || null,
+      reason: (latest.lifecycle && latest.lifecycle.stage_reason) || '',
+      nextAction: (latest.lifecycle && latest.lifecycle.next_action) || '',
+    },
+    probability: {
+      percentage: close.percentage ?? c.closeProbability ?? null,
+      level: close.level || '',
+      positive: close.positive_signals || [],
+      risk: close.risk_signals || [],
+      suggestion: close.suggestion || '',
+      why: close.why || '',
+    },
+  };
+}
+
+// 業務員按「✓ 正確」或「✎ 修正」：標籤存成 source: manual，之後 AI 不會蓋掉
+// tag 是 toAnalysis 產生的標籤；value 是業務員確認或改過的內容
+export async function saveCustomerTag(customerId, tag, value) {
+  const body = { customerId, type: tag.type, category: tag.label, value };
+  if (value !== tag.value) body.oldValue = tag.value;
+  const { data } = await request('saveCustomerTag', { body });
+  return data; // { customerId, hardNeeds 或 emotionalValues, needs? }
+}
 
 // ===== 以下由芷璇新增：登入、業務員資料、回訪話術 =====
 

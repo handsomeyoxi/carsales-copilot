@@ -10,6 +10,7 @@ import BackHeader from '../src/components/BackHeader';
 import SectionTitle from '../src/components/SectionTitle';
 import StageTracker from '../src/components/StageTracker';
 import Tag from '../src/components/Tag';
+import { toAnalysis } from '../src/api';
 import { useCustomers } from '../src/context/CustomerContext';
 import { analysis } from '../src/data/mockData';
 import { colors, radius } from '../src/theme';
@@ -72,8 +73,16 @@ function TagRow({ item, tone, review, onConfirm, onSave, isLast }) {
   );
 }
 
-function AgentSection({ title, items, tone }) {
-  const { tagReviews, reviewTag } = useCustomers();
+function AgentSection({ title, items, tone, customerId }) {
+  const { tagReviews, reviewCustomerTag } = useCustomers();
+  if (items.length === 0) {
+    return (
+      <View>
+        <Text style={styles.agentTitle}>{title}</Text>
+        <Text style={styles.empty}>這次對話沒有抓到這類標籤</Text>
+      </View>
+    );
+  }
   return (
     <View>
       <Text style={styles.agentTitle}>{title}</Text>
@@ -83,10 +92,15 @@ function AgentSection({ title, items, tone }) {
             key={item.id}
             item={item}
             tone={tone}
-            review={tagReviews[item.id]}
+            // 剛按的（tagReviews）優先，其次是後端存的（業務員之前確認過的標籤）
+            review={tagReviews[item.id] ?? item.review}
             isLast={i === items.length - 1}
-            onConfirm={() => reviewTag(item.id, 'confirmed', item.value)}
-            onSave={(v) => reviewTag(item.id, v === item.value ? 'confirmed' : 'edited', v)}
+            onConfirm={() => reviewCustomerTag(customerId, item, 'confirmed', item.value)}
+            onSave={(v) => {
+              const value = v.trim();
+              if (!value) return;
+              reviewCustomerTag(customerId, item, value === item.value ? 'confirmed' : 'edited', value);
+            }}
           />
         ))}
       </View>
@@ -96,42 +110,49 @@ function AgentSection({ title, items, tone }) {
 
 function DealSection({ data, customerId }) {
   const { lifecycle, probability, summary } = data;
+  const hasProbability = probability.percentage !== null && probability.percentage !== undefined;
   return (
     <View>
-      <SectionTitle title="AI 對話摘要" />
-      <View style={styles.card}>
-        {summary.map((s) => (
-          <Text key={s} style={styles.bullet}>
-            • {s}
-          </Text>
-        ))}
-      </View>
+      {summary.length > 0 && (
+        <>
+          <SectionTitle title="AI 對話摘要" />
+          <View style={styles.card}>
+            {summary.map((s) => (
+              <Text key={s} style={styles.bullet}>
+                • {s}
+              </Text>
+            ))}
+          </View>
+        </>
+      )}
 
       <SectionTitle title="客戶生命週期" />
       <View style={styles.card}>
         <StageTracker stage={lifecycle.stage} />
-        <Text style={styles.reason}>判斷理由：{lifecycle.reason}</Text>
-        <Text style={styles.next}>👉 下一步：{lifecycle.nextAction}</Text>
+        {!!lifecycle.reason && <Text style={styles.reason}>判斷理由：{lifecycle.reason}</Text>}
+        {!!lifecycle.nextAction && <Text style={styles.next}>👉 下一步：{lifecycle.nextAction}</Text>}
       </View>
 
-      <SectionTitle title={`成交機率（${probability.level}）`} />
+      <SectionTitle title={hasProbability ? `成交機率（${probability.level || `${probability.percentage}%`}）` : '成交機率（尚未分析）'} />
       <View style={styles.card}>
-        <ProbabilityBar value={probability.percentage} height={10} />
-        <Text style={styles.signalTitle}>有利信號</Text>
+        <ProbabilityBar value={hasProbability ? probability.percentage : 0} height={10} />
+        {probability.positive.length > 0 && <Text style={styles.signalTitle}>有利信號</Text>}
         {probability.positive.map((s) => (
           <Text key={s} style={[styles.signal, { color: colors.green }]}>
             ＋ {s}
           </Text>
         ))}
-        <Text style={styles.signalTitle}>風險信號</Text>
+        {probability.risk.length > 0 && <Text style={styles.signalTitle}>風險信號</Text>}
         {probability.risk.map((s) => (
           <Text key={s} style={[styles.signal, { color: colors.red }]}>
             － {s}
           </Text>
         ))}
-        <View style={styles.suggestBox}>
-          <Text style={styles.suggestText}>💡 {probability.suggestion}</Text>
-        </View>
+        {!!probability.suggestion && (
+          <View style={styles.suggestBox}>
+            <Text style={styles.suggestText}>💡 {probability.suggestion}</Text>
+          </View>
+        )}
       </View>
 
       <Pressable
@@ -146,9 +167,10 @@ function DealSection({ data, customerId }) {
 
 export default function SummaryScreen() {
   const { id = 'c1' } = useLocalSearchParams();
-  const { getCustomer, tagReviews } = useCustomers();
+  const { getCustomer, tagReviews, dataSource } = useCustomers();
   const customer = getCustomer(id);
-  const data = analysis[id];
+  // 接上後端時用客戶身上的 AI 分析結果；後端沒開時才用假資料
+  const data = dataSource === 'api' ? toAnalysis(customer) : analysis[id];
   const [tab, setTab] = useState('hard');
 
   // 標籤驗證統計
@@ -159,7 +181,7 @@ export default function SummaryScreen() {
   if (data) {
     [...data.hard, ...data.emotion].forEach((t) => {
       total += 1;
-      const r = tagReviews[t.id];
+      const r = tagReviews[t.id] ?? t.review;
       if (r) {
         reviewed += 1;
         if (r.status === 'confirmed') correct += 1;
@@ -182,9 +204,17 @@ export default function SummaryScreen() {
           <Text style={styles.empty}>這位客戶還沒有錄音紀錄，按下方中間的 🎙️ 錄一段對話吧！</Text>
         ) : (
           <>
-            <Text style={styles.meta}>
-              {data.recordedAt} 錄音 · {data.duration} · 語音辨識信心 {data.asrConfidence}%
-            </Text>
+            {!!data.recordedAt && (
+              <Text style={styles.meta}>
+                {[
+                  `${data.recordedAt} 錄音`,
+                  data.duration,
+                  data.asrConfidence ? `語音辨識信心 ${data.asrConfidence}%` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </Text>
+            )}
 
             {/* 標籤驗證進度 */}
             <View style={styles.verifyBox}>
@@ -214,8 +244,10 @@ export default function SummaryScreen() {
               ))}
             </View>
 
-            {tab === 'hard' && <AgentSection title="硬需求 AGENT" items={data.hard} tone="green" />}
-            {tab === 'emotion' && <AgentSection title="情緒價值 AGENT" items={data.emotion} tone="pink" />}
+            {tab === 'hard' && <AgentSection title="硬需求 AGENT" items={data.hard} tone="green" customerId={id} />}
+            {tab === 'emotion' && (
+              <AgentSection title="情緒價值 AGENT" items={data.emotion} tone="pink" customerId={id} />
+            )}
             {tab === 'deal' && <DealSection data={data} customerId={id} />}
           </>
         )}

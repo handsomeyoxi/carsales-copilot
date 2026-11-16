@@ -8,7 +8,7 @@ import { authErrorMessage } from '../src/firebase';
 import { colors, radius } from '../src/theme';
 
 export default function LoginScreen() {
-  const { onboarded, login, authUser, authReady } = useCustomers();
+  const { login, authUser, authReady } = useCustomers();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -32,7 +32,7 @@ export default function LoginScreen() {
     try {
       const { needsProfile } = await login(email, password);
       if (needsProfile) router.replace('/setup-profile');
-      else router.replace(onboarded ? '/home' : '/onboarding'); // replace = 不能按返回鍵回到登入頁
+        else router.replace('/home'); // 新手引導只在註冊完看一次；replace = 不能按返回鍵回到登入頁
     } catch (e) {
       setError(authErrorMessage(e));
     } finally {
