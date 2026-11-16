@@ -13,8 +13,10 @@ import { dayLabel } from './utils/date';
 export const FUNCTIONS_URL =
   process.env.EXPO_PUBLIC_FUNCTIONS_URL || 'http://127.0.0.1:5001/carsales-copilot/us-central1';
 
-// 還沒接 Firebase 登入前，先用固定的業務員 id（和 functions/scripts/seed-emulator.js 一樣）
-export const SALESPERSON_ID = process.env.EXPO_PUBLIC_SALESPERSON_ID || 'demo-sales';
+// 沒登入時用的示範業務員 id（和 functions/scripts/seed-emulator.js 一樣）
+// 登入後會用 setSalespersonId(uid) 換成登入帳號的 uid（芷璇改：const → let，函式在檔案最後）
+const DEFAULT_SALESPERSON_ID = process.env.EXPO_PUBLIC_SALESPERSON_ID || 'demo-sales';
+export let SALESPERSON_ID = DEFAULT_SALESPERSON_ID;
 
 // 設成 true 就完全不連後端，只用 mockData（後端掛掉或 demo 保險用）
 export const USE_MOCK = process.env.EXPO_PUBLIC_USE_MOCK === 'true';
@@ -108,6 +110,7 @@ export async function fetchDashboard(salespersonId = SALESPERSON_ID) {
   const { data } = await request('getDashboard', { method: 'GET', query: { salespersonId } });
   return {
     stats: data.stats,
+    salesperson: data.salesperson || null, // 芷璇加：登入後用來載入業務員資料
     customers: data.customers.map(toCustomer),
     todos: data.todos.map(toTodo),
     followUps: data.followUps.map(toFollowUp),
@@ -136,4 +139,29 @@ export async function saveCustomer({ id, name, phone, source, temperature, note,
 // 業務員手動改客戶狀態（new / following / won），之後 AI 分析不會蓋掉
 export async function updateCustomerStatus(customerId, status) {
   await request('updateCustomerStatus', { body: { customerId, status } });
+}
+
+
+// ===== 以下由芷璇新增：登入、業務員資料、回訪話術 =====
+
+// 登入後換成登入帳號的 uid；登出時傳 null，換回示範帳號
+// 其他 API 的預設參數 salespersonId = SALESPERSON_ID 會在呼叫當下讀取，所以全部都會跟著換
+export function setSalespersonId(id) {
+  SALESPERSON_ID = id || DEFAULT_SALESPERSON_ID;
+}
+
+// 註冊後填業務員資料、編輯個人資料：存到 salespersons/{uid}
+// brand 決定 AI 推薦哪個品牌的車
+export async function saveSalesperson({ name, phone, email, brand }, salespersonId = SALESPERSON_ID) {
+  const body = { salespersonId, name, phone, email, brand };
+  Object.keys(body).forEach((k) => body[k] === undefined && delete body[k]);
+  const { data } = await request('saveSalesperson', { body });
+  return data;
+}
+
+// 回訪軍師：請 AI 依這位客戶的對話紀錄產生回訪建議（大約要 30 秒～1 分鐘）
+// 回傳格式：{ timing: { when, reason }, channel, scripts: { opening, core, closing }, avoid_repeating, objection_prep, goal }
+export async function fetchFollowUpAdvice(customerId, salespersonId = SALESPERSON_ID) {
+  const { data } = await request('followUpAdvisor', { body: { customerId, salespersonId } });
+  return data;
 }

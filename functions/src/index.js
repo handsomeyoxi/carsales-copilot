@@ -358,10 +358,13 @@ exports.getDashboard = functions.runWith({ timeoutSeconds: 300 }).https.onReques
       .sort((a, b) => (b.closeProbability ?? -1) - (a.closeProbability ?? -1));
     const todos = todosSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     const followUps = followUpsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    // 芷璇加：登入後前端要知道業務員的姓名、品牌（沒填過資料就是 null，前端會帶去填資料頁）
+    const salesperson = await getSalesperson(salespersonId);
 
     return res.status(200).json({
       success: true,
       data: {
+        salesperson,
         stats: {
           totalCustomers: customers.length,
           highProbability: customers.filter((c) => c.closeProbability >= 70).length,

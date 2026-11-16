@@ -2,6 +2,9 @@
 // 任何頁面都用 useCustomers() 拿資料和操作函式
 import { createContext, useContext, useEffect, useState } from 'react';
 import * as api from '../api';
+// 芷璇加：Firebase 登入
+import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { auth } from '../firebase';
 import {
   initialConsents,
   initialCustomers,
@@ -36,13 +39,19 @@ export function CustomerProvider({ children }) {
   async function reload() {
     if (api.USE_MOCK) return;
     setLoading(true);
+    const requestedId = api.SALESPERSON_ID; // 芷璇加：記住這次是載入誰的資料
     try {
       const data = await api.fetchDashboard();
+      // 芷璇加：載入途中換了帳號（例如剛登入），這份舊資料就不要蓋上去
+      if (requestedId !== api.SALESPERSON_ID) return undefined;
       setCustomers(data.customers);
       setTodos(data.todos);
       setFollowUps(data.followUps);
+      // 芷璇加：後端有業務員資料就換上去（登入後才會是自己的資料）
+      if (data.salesperson) setProfile((prev) => ({ ...prev, ...data.salesperson }));
       setDataSource('api');
       setLoadError(null);
+      return data; // 芷璇加：登入時要知道有沒有填過業務員資料
     } catch (error) {
       console.warn('載入後端資料失敗，先用假資料：', error.message);
       setLoadError(error.message);
@@ -88,6 +97,65 @@ export function CustomerProvider({ children }) {
   function register({ email }) {
     setProfile({ name: '', email, phone: '', brand: '', dealsThisMonth: 0 });
     setOnboarded(false); // 新帳號要看新手引導
+  }
+
+  // ---- 登入（芷璇新增）----
+  // authUser：Firebase 的登入帳號（null = 沒登入）；authReady：開 App 時檢查完登入狀態了沒
+  const [authUser, setAuthUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+
+  // 登入狀態改變（登入、登出、重開 App 自動登入）時：換業務員 id，重新載入他的資料
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setAuthUser(user);
+      api.setSalespersonId(user ? user.uid : null);
+      if (user) {
+        setProfile((prev) => ({ ...prev, email: user.email }));
+        await reload();
+      }
+      setAuthReady(true);
+    });
+    return unsubscribe;
+  }, []);
+
+  // 登入：回傳 { needsProfile } → true 代表還沒填業務員資料（沒有品牌），要先去填
+  async function login(email, password) {
+    const { user } = await signInWithEmailAndPassword(auth, email.trim(), password);
+    api.setSalespersonId(user.uid);
+    const data = await reload();
+    // 後端連不上（data 是 undefined）就先讓他進去看假資料，不擋登入
+    const needsProfile = Boolean(data) && !(data.salesperson && data.salesperson.brand);
+    return { needsProfile };
+  }
+
+  // 註冊：建立 Firebase 帳號，接著到 setup-profile 填業務員資料
+  async function registerAccount(email, password) {
+    const { user } = await createUserWithEmailAndPassword(auth, email.trim(), password);
+    api.setSalespersonId(user.uid);
+    register({ email: user.email });
+    // 新帳號還沒有任何客戶，把畫面上的假資料清掉
+    setCustomers([]);
+    setTodos([]);
+    setFollowUps([]);
+    return user;
+  }
+
+  // 儲存業務員資料（註冊第 2 步、編輯個人資料都用這個）：先存後端，成功才改畫面
+  async function saveProfile(data) {
+    const saved = await api.saveSalesperson({ ...data, email: (authUser && authUser.email) || profile.email });
+    setProfile((prev) => ({ ...prev, ...data, ...(saved || {}) }));
+    return saved;
+  }
+
+  async function logout() {
+    await signOut(auth);
+    setProfile(salesperson);
+    setOnboarded(false);
+  }
+
+  // 回訪軍師拿到新的 AI 建議後，存在客戶資料上（後端也會存），下次打開不用再等
+  function setFollowUpAdvice(customerId, advice) {
+    setCustomers((prev) => prev.map((c) => (c.id === customerId ? { ...c, followUpAdvice: advice } : c)));
   }
 
   // ---- AI 助理對話 ----
@@ -299,6 +367,14 @@ export function CustomerProvider({ children }) {
         notify,
         updateNotify,
         updateProfile,
+        // 芷璇加：登入
+        authUser,
+        authReady,
+        login,
+        registerAccount,
+        saveProfile,
+        logout,
+        setFollowUpAdvice,
       }}
     >
       {children}

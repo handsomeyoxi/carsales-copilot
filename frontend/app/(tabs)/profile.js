@@ -31,7 +31,7 @@ function SettingRow({ icon, label, detail, onPress }) {
 }
 
 export default function ProfileScreen() {
-  const { consents, vocabulary, crm, profile: salesperson } = useCustomers();
+  const { consents, vocabulary, crm, profile: salesperson, logout } = useCustomers();
   const activeConsents = consents.filter((c) => c.status === 'active').length;
 
   return (
@@ -75,7 +75,13 @@ export default function ProfileScreen() {
         <SettingRow icon="🔗" label="CRM 串接" detail={crm.system} onPress={() => router.push('/crm')} />
         <SettingRow icon="🔔" label="通知設定" onPress={() => router.push('/notifications')} />
 
-        <Pressable style={styles.logoutBtn} onPress={() => router.replace('/')}>
+        <Pressable
+          style={styles.logoutBtn}
+          onPress={async () => {
+            await logout(); // 芷璇加：真的登出 Firebase 帳號
+            router.replace('/');
+          }}
+        >
           <Text style={styles.logoutText}>登出</Text>
         </Pressable>
       </ScrollView>

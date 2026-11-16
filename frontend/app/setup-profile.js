@@ -1,5 +1,6 @@
 // 註冊第 2 步：填寫業務員資料（姓名、手機、代理品牌、展間、職稱）
 // 註冊完一定會先到這頁，填完才進新手引導
+import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -8,11 +9,23 @@ import { useCustomers } from '../src/context/CustomerContext';
 import { colors } from '../src/theme';
 
 export default function SetupProfileScreen() {
-  const { profile, updateProfile } = useCustomers();
+  const { profile, saveProfile } = useCustomers();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
-  function save(data) {
-    updateProfile(data);
-    router.replace('/onboarding');
+  // 存到後端（salespersons/{uid}），成功才進新手引導
+  async function save(data) {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await saveProfile(data);
+      router.replace('/onboarding');
+    } catch (e) {
+      setError(`儲存失敗：${e.message}，請確認後端有沒有開，再試一次`);
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -22,7 +35,8 @@ export default function SetupProfileScreen() {
         <Text style={styles.title}>填寫業務員資料</Text>
         <Text style={styles.sub}>讓 VoiceRec 知道你賣哪個品牌，才能推薦你家的車款給客戶</Text>
         <View style={{ height: 16 }} />
-        <SalespersonForm initial={profile} submitText="完成，開始使用" onSubmit={save} />
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+        <SalespersonForm initial={profile} submitText={busy ? '儲存中…' : '完成，開始使用'} onSubmit={save} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -33,5 +47,6 @@ const styles = StyleSheet.create({
   container: { padding: 24, paddingBottom: 40 },
   step: { fontSize: 13, color: colors.primary, fontWeight: '600' },
   title: { fontSize: 24, fontWeight: '700', color: colors.text, marginTop: 4 },
+  error: { color: colors.red, fontSize: 13, marginBottom: 10 },
   sub: { fontSize: 14, color: colors.subText, marginTop: 6, lineHeight: 21 },
 });
