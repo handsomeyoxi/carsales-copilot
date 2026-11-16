@@ -1,10 +1,10 @@
 // 首頁：品牌新車幻燈片 ＋ 6 個方格按鈕（點進去才看細項）
+import { router } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
 import CarSlideshow from '../../src/components/CarSlideshow';
 import { useCustomers } from '../../src/context/CustomerContext';
-import { analysis, followUps } from '../../src/data/mockData';
+import { analysis } from '../../src/data/mockData';
 import { colors, radius } from '../../src/theme';
 import { todayISO, WEEKDAYS } from '../../src/utils/date';
 
@@ -30,7 +30,7 @@ function GridButton({ icon, title, count, hint, tint, onPress }) {
 }
 
 export default function HomeScreen() {
-  const { profile, customers, todos, tagReviews, activeSession, getCustomer } = useCustomers();
+  const { profile, customers, todos, tagReviews, activeSession, getCustomer, followUps } = useCustomers();
   const today = new Date();
   const todayStr = todayISO();
 

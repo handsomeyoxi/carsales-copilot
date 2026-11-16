@@ -1,13 +1,12 @@
 // 客戶詳情：上方是客戶名片，下方分成四個格子
 // ① 基本資料 ② 客戶需求 ③ 成交機率 ④ 後續處理 —— 點格子才進去看完整內容（customer-section.js）
 // 檔名 [id] 代表「網址的這一段是變數」，例如 /customer/c1 → id = 'c1'
+import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useLocalSearchParams } from 'expo-router';
 import BackHeader from '../../src/components/BackHeader';
 import CustomerTags from '../../src/components/CustomerTags';
 import { useCustomers } from '../../src/context/CustomerContext';
-import { followUps } from '../../src/data/mockData';
 import { colors, radius } from '../../src/theme';
 import { dayLabel } from '../../src/utils/date';
 import { dealAnalysis, recommendCars } from '../../src/utils/insights';
@@ -38,7 +37,7 @@ function Tile({ no, icon, title, color, onPress, children }) {
 export default function CustomerDetailScreen() {
   const { id } = useLocalSearchParams();
   const ctx = useCustomers();
-  const { getCustomer, todos, profile } = ctx;
+  const { getCustomer, todos, profile, followUps } = ctx;
   const customer = getCustomer(id);
 
   if (!customer) {

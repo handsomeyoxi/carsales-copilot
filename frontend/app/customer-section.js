@@ -1,9 +1,9 @@
 // 客戶詳情的「單一格子」內容頁：從客戶詳情的四格點進來
 // /customer-section?id=c1&s=basic|needs|deal|next
 // ① 基本資料 ② 客戶需求（＋推薦自家品牌車款）③ AI 成交機率分析（＋原因＋競品比較）④ 後續處理（回訪、待辦）
+import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useLocalSearchParams } from 'expo-router';
 import BackHeader from '../src/components/BackHeader';
 import Chip from '../src/components/Chip';
 import CustomerTags from '../src/components/CustomerTags';
@@ -12,7 +12,7 @@ import StageTracker from '../src/components/StageTracker';
 import TodoItem from '../src/components/TodoItem';
 import { useCustomers } from '../src/context/CustomerContext';
 import { brandOf } from '../src/data/cars';
-import { followUps, interactions, STATUSES } from '../src/data/mockData';
+import { interactions, STATUSES } from '../src/data/mockData';
 import { colors, radius } from '../src/theme';
 import { dayLabel } from '../src/utils/date';
 import { compareWithRival, dealAnalysis, recommendCars } from '../src/utils/insights';
@@ -55,7 +55,7 @@ function InfoLine({ label, value }) {
 export default function CustomerSectionScreen() {
   const { id, s: current = 'basic' } = useLocalSearchParams();
   const ctx = useCustomers();
-  const { getCustomer, updateCustomer, todos, toggleTodo, consents, profile } = ctx;
+  const { getCustomer, updateCustomer, todos, toggleTodo, consents, profile, followUps } = ctx;
   const customer = getCustomer(id);
 
   if (!customer) {

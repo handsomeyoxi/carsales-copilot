@@ -1,17 +1,17 @@
 // 回訪提醒清單（首頁方格「回訪提醒」點進來）
+import { router } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
 import BackHeader from '../src/components/BackHeader';
 import CustomerTags from '../src/components/CustomerTags';
 import { probabilityColor } from '../src/components/ProbabilityBar';
 import { useCustomers } from '../src/context/CustomerContext';
-import { followUps } from '../src/data/mockData';
 import { colors, radius } from '../src/theme';
 import { dayLabel } from '../src/utils/date';
 
+
 export default function FollowUpsScreen() {
-  const { getCustomer } = useCustomers();
+  const { getCustomer, followUps } = useCustomers();
   const list = [...followUps].sort((a, b) => (a.date > b.date ? 1 : -1));
 
   return (

@@ -1,17 +1,16 @@
 // 錄音流程 ①：選客戶（從畫面下方彈出的選單）
 // 今天要回訪的客戶排最前面，並標示是否已授權錄音
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { router } from 'expo-router';
 import Tag from '../../src/components/Tag';
 import { useCustomers } from '../../src/context/CustomerContext';
-import { followUps } from '../../src/data/mockData';
-import { goRecord } from '../../src/utils/recording';
 import { colors, radius } from '../../src/theme';
+import { goRecord } from '../../src/utils/recording';
 
 export default function PickCustomerSheet() {
   const ctx = useCustomers();
-  const { customers, hasConsent } = ctx;
+  const { customers, hasConsent, followUps } = ctx;
   const [selected, setSelected] = useState(null);
   const [keyword, setKeyword] = useState('');
 

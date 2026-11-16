@@ -1,18 +1,18 @@
 // 待辦行事曆：月曆上看每天的待辦（紫點）和回訪（橘點），點日期看當天清單，可自己新增待辦
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
 import BackHeader from '../src/components/BackHeader';
 import MonthCalendar from '../src/components/MonthCalendar';
 import TodoItem from '../src/components/TodoItem';
 import { useCustomers } from '../src/context/CustomerContext';
-import { followUps } from '../src/data/mockData';
 import { colors, radius } from '../src/theme';
 import { dayLabel, todayISO } from '../src/utils/date';
 
+
 export default function CalendarScreen() {
-  const { todos, toggleTodo, getCustomer } = useCustomers();
+  const { todos, toggleTodo, getCustomer, followUps } = useCustomers();
   const [selected, setSelected] = useState(todayISO());
 
   // 每天有幾件待辦、幾個回訪 → 月曆上的小點

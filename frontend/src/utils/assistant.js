@@ -2,9 +2,9 @@
 // 之後接後端時，把 askAssistant 改成呼叫 Gemini 的 API（把客戶資料一起當成 prompt 送出），
 // 回傳一樣的格式 { text, actions } 就好，聊天畫面不用改。
 // actions：回覆下方的按鈕，例如 { label: '看回訪話術', path: '/revisit', params: { id: 'c1' } }
-import { followUps, revisit } from '../data/mockData';
-import { compareWithRival, dealAnalysis, recommendCars } from './insights';
+import { revisit } from '../data/mockData';
 import { dayLabel, todayISO } from './date';
+import { compareWithRival, dealAnalysis, recommendCars } from './insights';
 
 export const SUGGESTIONS = [
   '今天該先聯絡誰？',
@@ -14,7 +14,7 @@ export const SUGGESTIONS = [
   '幫我新增待辦',
 ];
 
-export function askAssistant(question, { customers, todos, profile }) {
+export function askAssistant(question, { customers, todos, profile, followUps = [] }) {
   const q = question.trim();
   const brand = profile.brand || 'BMW';
   const customer = customers.find((c) => q.includes(c.name));
