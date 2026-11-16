@@ -4,7 +4,7 @@ const admin = require("firebase-admin");
 const { FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { analyzeConversation, analyzeAfterConversation, generateQuotation } = require("./gemini");
 const { analyzeInsight, followUpAdvisor } = require("./advisor");
-const { mergeTags, mergeStrings, hardNeedsToNeeds } = require("./tags");
+const { mergeTags, mergeStrings, hardNeedsToNeeds, needsToHardNeeds } = require("./tags");
 const { SINGLE_VALUE_CATEGORIES, TAG_TEXT_FIELDS, CATEGORIES_BY_GROUP } = require("./tagCategories");
 
 admin.initializeApp();
@@ -445,7 +445,77 @@ exports.updateCustomerStatus = functions.https.onRequest(async (req, res) => {
   }
 });
 
+// 業務員新增或修改客戶基本資料、客戶需求
+// - customerId 不存在（或沒帶）= 新增：需要 salespersonId、name。前端可以自己產生 customerId，畫面就不用等後端回傳 id
+// - customerId 已存在 = 修改：只改有傳的欄位
+// - needs（客戶需求表單）會轉成手動硬需求標籤存進 hardNeeds，之後 AI 分析不會蓋掉；needs 由 hardNeeds 重新算
+// - 客戶狀態（status）不在這裡改，請用 updateCustomerStatus
+const TEMPERATURES = ["hot", "warm", "cold"];
+const CUSTOMER_TEXT_FIELDS = ["phone", "source", "note", "interestedCar"];
 
+exports.saveCustomer = functions.https.onRequest(async (req, res) => {
+  setCORS(res);
+  if (req.method === "OPTIONS") return res.status(204).send("");
+
+  try {
+    const body = req.body || {};
+    const { customerId, salespersonId, name, temperature, needs } = body;
+
+    if (name !== undefined && (typeof name !== "string" || name.trim() === "")) {
+      return res.status(400).json({ error: "name 不能是空的" });
+    }
+    if (temperature !== undefined && temperature !== null && !TEMPERATURES.includes(temperature)) {
+      return res.status(400).json({ error: "temperature 只能是 hot / warm / cold" });
+    }
+    if (needs !== undefined && (needs === null || typeof needs !== "object" || Array.isArray(needs))) {
+      return res.status(400).json({ error: "needs 格式不對" });
+    }
+
+    const ref = customerId ? db.collection("customers").doc(customerId) : db.collection("customers").doc();
+    const snap = customerId ? await ref.get() : null;
+    const isNew = !snap || !snap.exists;
+    const current = isNew ? {} : snap.data();
+
+    if (isNew && (!salespersonId || name === undefined)) {
+      return res.status(400).json({ error: "新增客戶需要 salespersonId 和 name" });
+    }
+
+    const update = { updatedAt: FieldValue.serverTimestamp() };
+    if (name !== undefined) update.name = name.trim();
+    if (temperature !== undefined) update.temperature = temperature;
+    for (const field of CUSTOMER_TEXT_FIELDS) {
+      if (body[field] !== undefined) {
+        update[field] = typeof body[field] === "string" && body[field].trim() !== "" ? body[field].trim() : null;
+      }
+    }
+    if (needs !== undefined) {
+      update.hardNeeds = needsToHardNeeds(needs, current.hardNeeds);
+      update.needs = hardNeedsToNeeds(update.hardNeeds);
+    }
+
+    if (isNew) {
+      Object.assign(update, {
+        salespersonId,
+        status: "new",
+        statusSource: "ai",
+        lifecycleStage: null,
+        closeProbability: null,
+        hardNeeds: update.hardNeeds || [],
+        needs: update.needs || hardNeedsToNeeds([]),
+        emotionalValues: [],
+        concerns: [],
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    await ref.set(update, { merge: true });
+    const saved = await ref.get();
+    return res.status(200).json({ success: true, created: isNew, data: { id: ref.id, ...saved.data() } });
+  } catch (error) {
+    console.error("saveCustomer error:", error);
+    return res.status(500).json({ error: "客戶資料儲存失敗" });
+  }
+});
 // 業務員自己新增或修改待辦（和 AI 產生的待辦放在同一個 todos collection）
 // 沒帶 id = 新增；帶 id = 修改（例如打勾完成、改日期）
 exports.saveTodo = functions.https.onRequest(async (req, res) => {

@@ -122,3 +122,18 @@ export async function saveTodo({ id, customerId, task, date, time, priority, don
   const { data } = await request('saveTodo', { body });
   return toTodo(data);
 }
+
+
+// 新增或修改客戶（customerId 不存在 = 新增）
+// 畫面上的 status 不從這裡存，請用 updateCustomerStatus
+export async function saveCustomer({ id, name, phone, source, temperature, note, interestedCar, needs }, salespersonId = SALESPERSON_ID) {
+  const body = { customerId: id, salespersonId, name, phone, source, temperature, note, interestedCar, needs };
+  Object.keys(body).forEach((k) => body[k] === undefined && delete body[k]);
+  const { data } = await request('saveCustomer', { body });
+  return toCustomer(data);
+}
+
+// 業務員手動改客戶狀態（new / following / won），之後 AI 分析不會蓋掉
+export async function updateCustomerStatus(customerId, status) {
+  await request('updateCustomerStatus', { body: { customerId, status } });
+}

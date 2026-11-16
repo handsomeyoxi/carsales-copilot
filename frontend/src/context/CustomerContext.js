@@ -97,9 +97,10 @@ export function CustomerProvider({ children }) {
   }
 
   // ---- 客戶 ----
+    // 新增客戶：id 由前端產生並一起送給後端，所以畫面可以馬上跳到客戶頁，不用等後端回傳 id
   function addCustomer(customer) {
     const newCustomer = {
-      id: 'c' + Date.now(),
+      id: 'c' + Date.now() + Math.random().toString(36).slice(2, 6),
       stage: '初次接觸',
       status: 'new',
       closeProbability: 20,
@@ -108,13 +109,42 @@ export function CustomerProvider({ children }) {
       ...customer,
     };
     setCustomers((prev) => [newCustomer, ...prev]);
+    if (dataSource === 'api') {
+      api
+        .saveCustomer(newCustomer)
+        .then((saved) => setCustomers((prev) => prev.map((c) => (c.id === saved.id ? { ...c, ...saved } : c))))
+        .catch((error) => {
+          console.warn('新增客戶失敗：', error.message);
+          setCustomers((prev) => prev.filter((c) => c.id !== newCustomer.id));
+        });
+    }
     return newCustomer;
   }
   function getCustomer(id) {
     return customers.find((c) => c.id === id);
   }
+  // 修改客戶：畫面先改，再存到後端；存失敗就改回原本的資料
+  // status 走 updateCustomerStatus（標記成手動，AI 不會蓋掉），其他欄位走 saveCustomer
   function updateCustomer(id, patch) {
+    const before = customers.find((c) => c.id === id);
     setCustomers((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+    if (dataSource !== 'api' || !before) return;
+
+    const { status, ...fields } = patch;
+    const jobs = [];
+    if (status !== undefined) jobs.push(api.updateCustomerStatus(id, status));
+    if (Object.keys(fields).length > 0) {
+      jobs.push(
+        // 後端會把 needs 重新整理過（例如算出 budgetMax），用回傳的資料更新畫面
+        api.saveCustomer({ id, ...fields }).then((saved) =>
+          setCustomers((prev) => prev.map((c) => (c.id === id ? { ...c, ...saved, status: c.status } : c)))
+        )
+      );
+    }
+    Promise.all(jobs).catch((error) => {
+      console.warn('客戶資料儲存失敗：', error.message);
+      setCustomers((prev) => prev.map((c) => (c.id === id ? before : c)));
+    });
   }
 
   // ---- 待辦 ----

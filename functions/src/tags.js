@@ -143,10 +143,49 @@ function hardNeedsToNeeds(hardNeeds) {
   };
 }
 
+// 前端「客戶需求」表單存檔：needs → 手動硬需求標籤（反過來的 hardNeedsToNeeds）
+// 業務員在表單上看過、按了儲存，這幾個類別就由業務員決定：
+// - 車款、預算、車型、用途、配備、顏色：整個換成表單上的內容，source 都是 manual，之後 AI 不會蓋掉
+// - 其他類別（購車時間、付款方式、決策者…）表單沒有，原本的標籤保留
+// - 原本就有的同一個標籤，保留 confidence、evidence
+const NEEDS_CATEGORIES = ["車款", "預算", "車型", "用途", "配備", "顏色"];
+
+function needsToHardNeeds(needs, existingHardNeeds) {
+  const existing = (Array.isArray(existingHardNeeds) ? existingHardNeeds : []).filter(Boolean);
+  const n = needs && typeof needs === "object" ? needs : {};
+  const now = new Date().toISOString();
+  const texts = (value) =>
+    (Array.isArray(value) ? value : [value]).map(asText).filter((t) => t && t !== "尚未提及");
+
+  // 表單的 features 裡，原本是「顏色」標籤的維持顏色，其他都算配備
+  const colorValues = new Set(existing.filter((t) => t.category === "顏色").map((t) => t.value));
+  const wanted = [
+    ...texts(n.lookingAt).map((v) => ["車款", v]),
+    ...texts(n.budget).slice(0, 1).map((v) => ["預算", v]),
+    ...texts(n.type).slice(0, 1).map((v) => ["車型", v]),
+    ...texts(n.usage).flatMap((u) => u.split("、")).map(asText).filter(Boolean).map((v) => ["用途", v]),
+    ...texts(n.features).map((v) => [colorValues.has(v) ? "顏色" : "配備", v]),
+  ];
+
+  const seen = new Set();
+  const manualTags = [];
+  for (const [category, value] of wanted) {
+    const key = `${category}|${value}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const original = existing.find((t) => t.category === category && t.value === value);
+    manualTags.push({ ...(original || {}), category, value, source: "manual", updatedAt: now });
+  }
+
+  const others = existing.filter((t) => !NEEDS_CATEGORIES.includes(t.category));
+  return [...others, ...manualTags];
+}
+
 module.exports = {
   normalizeInsight,
   mergeTags,
   mergeStrings,
   parseBudgetMax,
   hardNeedsToNeeds,
+  needsToHardNeeds,
 };
