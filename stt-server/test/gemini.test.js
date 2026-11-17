@@ -49,7 +49,37 @@ test('過期的舊金鑰（400 API key expired）也是金鑰錯誤', async () =
 
 test('其他錯誤照原樣丟出（不會誤判成金鑰問題）', async () => {
   process.env.LLM_PROVIDER = 'gemini';
+  process.env.GEMINI_RETRY_WAIT_MS = '0';
   process.env.GEMINI_API_KEY = 'AQ.Ab8_fake_key';
   fakeFetch(503, { error: { message: 'The model is overloaded.' } });
   await assert.rejects(organizeTranscript([{ seq: 0, text: 'x' }]), (e) => e.status === 503 && e.code !== 'API_KEY_INVALID');
+});
+
+test('主要模型 503 忙線 → 自動換下一個模型', async () => {
+  process.env.LLM_PROVIDER = 'gemini';
+  process.env.GEMINI_API_KEY = 'AQ.Ab8_fake_key';
+  process.env.GEMINI_RETRY_WAIT_MS = '0';
+  const answer = { utterances: [{ speaker: 'sales', text: '您好', original: '', segmentSeq: 0 }], summary: '打招呼', uncertain: [] };
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(url);
+    if (url.includes('gemini-3.8-flash')) return { ok: false, status: 503, statusText: '', json: async () => ({ error: { message: 'overloaded' } }) };
+    return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(answer) }] } }] }) };
+  };
+  const r = await organizeTranscript([{ seq: 0, text: '您好' }]);
+  assert.equal(r.summary, '打招呼');
+  assert.equal(urls.length, 2);
+  assert.match(urls[1], /gemini-3\.7-flash/);
+});
+
+test('金鑰錯誤不換模型，直接丟出', async () => {
+  process.env.LLM_PROVIDER = 'gemini';
+  process.env.GEMINI_API_KEY = 'AIzaOld';
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return { ok: false, status: 400, statusText: '', json: async () => ({ error: { message: 'API key not valid.' } }) };
+  };
+  await assert.rejects(organizeTranscript([{ seq: 0, text: 'x' }]), (e) => e.code === 'API_KEY_INVALID');
+  assert.equal(calls, 1);
 });
