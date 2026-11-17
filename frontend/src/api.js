@@ -8,8 +8,8 @@
 //   EXPO_PUBLIC_USE_MOCK=false
 // 用手機或 iPad 測試時，127.0.0.1 要換成電腦的區網 IP（例如 192.168.1.23）
 
-import { dayLabel } from './utils/date';
 import { auth } from './firebase';
+import { dayLabel } from './utils/date';
 
 export const FUNCTIONS_URL =
   process.env.EXPO_PUBLIC_FUNCTIONS_URL || 'http://127.0.0.1:5001/carsales-copilot/us-central1';
@@ -237,8 +237,7 @@ export async function fetchFollowUpAdvice(customerId, salespersonId = SALESPERSO
 // 流程：startRecording → 每 30 秒 uploadSegment 一段 → finishRecording → analyzeRecording
 // 錄音本身（MediaRecorder、每 30 秒切一段）寫在 src/utils/recorder.js
 
-// import 放在這裡是為了不動到檔案上面別人的程式；JavaScript 的 import 寫在檔案任何頂層位置都可以
-import { auth } from './firebase';
+
 
 // stt-server 的網址：frontend/.env 設 EXPO_PUBLIC_STT_URL，沒設就用本機
 export const STT_URL = process.env.EXPO_PUBLIC_STT_URL || 'http://127.0.0.1:3000';
