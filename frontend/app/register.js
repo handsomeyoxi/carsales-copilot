@@ -1,11 +1,12 @@
-// 註冊頁：業務員建立帳號
-// 目前是假註冊（資料只存在 App 裡），之後換成 Firebase Auth
+// 註冊頁：業務員建立帳號（Firebase 帳號密碼）
+// 帳號建立後到 setup-profile 填業務員資料
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import BackHeader from '../src/components/BackHeader';
 import { useCustomers } from '../src/context/CustomerContext';
+import { authErrorMessage } from '../src/firebase';
 import { colors, radius } from '../src/theme';
 
 
@@ -25,7 +26,9 @@ function Field({ label, error, ...inputProps }) {
 }
 
 export default function RegisterScreen() {
-  const { register, termsAgreed: agreed, setTermsAgreed: setAgreed } = useCustomers();
+  const { registerAccount, termsAgreed: agreed, setTermsAgreed: setAgreed } = useCustomers();
+  const [serverError, setServerError] = useState(''); // Firebase 回來的錯誤，例如 Email 已註冊
+  const [busy, setBusy] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -41,11 +44,19 @@ export default function RegisterScreen() {
   const hasError = Object.values(errors).some(Boolean);
   const show = (key) => (submitted ? errors[key] : '');
 
-  function handleRegister() {
+  async function handleRegister() {
     setSubmitted(true);
     if (hasError) return;
-    register({ email });
-    router.replace('/setup-profile'); // 註冊完 → 填業務員資料 → 新手引導 → 首頁
+    setBusy(true);
+    setServerError('');
+    try {
+      await registerAccount(email, password);
+      router.replace('/setup-profile'); // 註冊完 → 填業務員資料 → 新手引導 → 首頁
+    } catch (e) {
+      setServerError(authErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -107,8 +118,10 @@ export default function RegisterScreen() {
         </View>
         {show('agreed') ? <Text style={styles.error}>{show('agreed')}</Text> : null}
 
-        <Pressable style={styles.primaryBtn} onPress={handleRegister}>
-          <Text style={styles.primaryText}>下一步：填寫業務員資料</Text>
+        {serverError ? <Text style={[styles.error, { marginBottom: 8 }]}>{serverError}</Text> : null}
+
+        <Pressable style={[styles.primaryBtn, busy && { opacity: 0.6 }]} onPress={handleRegister} disabled={busy}>
+          <Text style={styles.primaryText}>{busy ? '建立帳號中…' : '下一步：填寫業務員資料'}</Text>
         </Pressable>
 
         <View style={styles.loginRow}>

@@ -1,20 +1,43 @@
-// ① 登入頁
-import { useState } from 'react';
+// ① 登入頁（Firebase 帳號密碼登入）
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useCustomers } from '../src/context/CustomerContext';
+import { authErrorMessage } from '../src/firebase';
 import { colors, radius } from '../src/theme';
 
 export default function LoginScreen() {
-  const { onboarded } = useCustomers();
+  const { login, authUser, authReady } = useCustomers();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false); // 登入中，按鈕先鎖住
+  const [notice, setNotice] = useState(''); // 還沒做的功能（忘記密碼、Google 登入）的提示
 
-  // 目前是假登入。之後換成 Firebase Auth
-  // 第一次登入 → 先看新手引導；看過了 → 直接進客戶總覽
-  function handleLogin() {
-    router.replace(onboarded ? '/home' : '/onboarding'); // replace = 不能按返回鍵回到登入頁
+  // 上次登入過、還沒登出 → 打開 App 直接進首頁
+  // 只在「剛打開 App、檢查完登入狀態」那一次判斷；之後的登入由 handleLogin、註冊頁自己決定要去哪
+  useEffect(() => {
+    if (authReady && authUser) router.replace('/home');
+  }, [authReady]);
+
+  // 沒填過業務員資料（沒有品牌）→ 先填資料；第一次登入 → 新手引導；看過了 → 首頁
+  async function handleLogin() {
+    if (!email.trim() || !password) {
+      setError('請輸入帳號和密碼');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const { needsProfile } = await login(email, password);
+      if (needsProfile) router.replace('/setup-profile');
+        else router.replace('/home'); // 新手引導只在註冊完看一次；replace = 不能按返回鍵回到登入頁
+    } catch (e) {
+      setError(authErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -50,13 +73,15 @@ export default function LoginScreen() {
           secureTextEntry // 輸入時顯示成圓點
         />
 
-        <Pressable style={styles.forgot}>
+        <Pressable style={styles.forgot} onPress={() => setNotice('忘記密碼功能還在製作中，請聯絡管理員重設密碼')}>
           <Text style={styles.forgotText}>忘記密碼？</Text>
         </Pressable>
 
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+
         {/* 登入按鈕 */}
-        <Pressable style={styles.loginBtn} onPress={handleLogin}>
-          <Text style={styles.loginText}>登入</Text>
+        <Pressable style={[styles.loginBtn, busy && { opacity: 0.6 }]} onPress={handleLogin} disabled={busy}>
+          <Text style={styles.loginText}>{busy ? '登入中…' : '登入'}</Text>
         </Pressable>
 
         {/* 分隔線「或」 */}
@@ -67,9 +92,10 @@ export default function LoginScreen() {
         </View>
 
         {/* Google 登入 */}
-        <Pressable style={styles.googleBtn} onPress={handleLogin}>
+        <Pressable style={styles.googleBtn} onPress={() => setNotice('Google 登入還在製作中，請先用 Email 登入')}>
           <Text style={styles.googleText}>🔵 使用 Google 帳號登入</Text>
         </Pressable>
+        {notice ? <Text style={styles.notice}>{notice}</Text> : null}
 
         {/* 註冊入口 */}
         <View style={styles.registerRow}>
@@ -121,6 +147,8 @@ const styles = StyleSheet.create({
   },
   forgot: { alignSelf: 'flex-end', marginTop: -6, marginBottom: 16 },
   forgotText: { color: colors.primary, fontSize: 14 },
+  error: { color: colors.red, fontSize: 13, marginBottom: 10 },
+  notice: { color: colors.subText, fontSize: 12, textAlign: 'center', marginTop: 8 },
   loginBtn: {
     backgroundColor: colors.primary,
     borderRadius: radius.md,
