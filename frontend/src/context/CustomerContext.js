@@ -283,8 +283,9 @@ export function CustomerProvider({ children }) {
       marks: 0,
     });
   }
+  // 芷璇改：patch 也可以傳函式 (prev) => ({ ... })，錄音一段一段加逐字稿時才不會蓋掉彼此
   function updateSession(patch) {
-    setActiveSession((prev) => (prev ? { ...prev, ...patch } : prev));
+    setActiveSession((prev) => (prev ? { ...prev, ...(typeof patch === 'function' ? patch(prev) : patch) } : prev));
   }
   function togglePause() {
     setActiveSession((prev) => {

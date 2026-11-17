@@ -225,3 +225,72 @@ export async function fetchFollowUpAdvice(customerId, salespersonId = SALESPERSO
   const { data } = await request('followUpAdvisor', { body: { customerId, salespersonId } });
   return data;
 }
+
+// ===== 以下由芷璇新增：錄音（stt-server）＋錄音後 AI 分析 =====
+// 流程：startRecording → 每 30 秒 uploadSegment 一段 → finishRecording → analyzeRecording
+// 錄音本身（MediaRecorder、每 30 秒切一段）寫在 src/utils/recorder.js
+
+// import 放在這裡是為了不動到檔案上面別人的程式；JavaScript 的 import 寫在檔案任何頂層位置都可以
+import { auth } from './firebase';
+
+// stt-server 的網址：frontend/.env 設 EXPO_PUBLIC_STT_URL，沒設就用本機
+export const STT_URL = process.env.EXPO_PUBLIC_STT_URL || 'http://127.0.0.1:3000';
+
+// stt-server 每個請求都要帶登入憑證（Firebase ID token）
+async function sttRequest(path, { json, form } = {}) {
+  const user = auth.currentUser;
+  if (!user) throw new Error('請先登入再錄音');
+  const headers = { Authorization: `Bearer ${await user.getIdToken()}` };
+  // 用 FormData 上傳音檔時不要自己設 Content-Type，瀏覽器會自動加上 boundary
+  if (json) headers['Content-Type'] = 'application/json';
+
+  let res;
+  try {
+    res = await fetch(`${STT_URL}${path}`, { method: 'POST', headers, body: form || JSON.stringify(json || {}) });
+  } catch {
+    throw new Error('連不上語音伺服器，請確認 stt-server 有沒有開（npm run dev）');
+  }
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    // 沒回 JSON，下面統一處理
+  }
+  if (!res.ok) {
+    const error = new Error((data && data.error) || `語音伺服器錯誤（HTTP ${res.status}）`);
+    error.status = res.status;
+    error.missing = data && data.missing; // finalize 回 409 時，列出還沒上傳的段數
+    throw error;
+  }
+  return data;
+}
+
+// 1. 開始錄音：建立一筆對話紀錄 → { conversationId }
+export async function startRecording(customerId) {
+  const { conversationId } = await sttRequest('/api/conversations', { json: { customerId } });
+  return { conversationId };
+}
+
+// 2. 上傳一段音檔（30 秒左右）→ { seq, text, keywords }
+//    keywords 長這樣：[{ category: 'budget', value: '400萬' }, …]
+export async function uploadSegment(conversationId, { blob, filename, seq, startSec, durationSec }) {
+  const form = new FormData();
+  form.append('audio', blob, filename);
+  form.append('seq', String(seq));
+  form.append('startSec', String(startSec));
+  form.append('durationSec', String(durationSec));
+  return sttRequest(`/api/conversations/${conversationId}/segments`, { form });
+}
+
+// 3. 結束錄音：後端把所有段落整理成「業務／客戶」對話 → { conversationText, utterances }
+export async function finishRecording(conversationId, { totalSegments, durationSec }) {
+  return sttRequest(`/api/conversations/${conversationId}/finalize`, { json: { totalSegments, durationSec } });
+}
+
+// 4. AI 分析：analyzeAfterConversation（成交分析、待辦、回訪）、analyzeInsight（硬需求、情緒價值標籤）
+//    兩個要同時呼叫；分析頁會分開呼叫，哪一個失敗就只重試那一個
+export const ANALYZE_APIS = ['analyzeInsight', 'analyzeAfterConversation'];
+export async function analyzeRecording(conversationId, name) {
+  const { data } = await request(name, { body: { conversationId } });
+  return data;
+}
