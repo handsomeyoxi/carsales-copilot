@@ -13,7 +13,89 @@ const db = admin.firestore();
 function setCORS(res) {
   res.set("Access-Control-Allow-Origin", "*");
   res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.set("Access-Control-Allow-Headers", "Content-Type");
+  res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+}
+
+
+// ===== 登入驗證 =====
+// 前端每個請求都帶 Authorization: Bearer <Firebase ID token>，這裡確認是誰、只能動自己的資料：
+// - salespersonId 一律換成登入帳號的 uid（前端傳什麼都不算數）
+// - 有 customerId、conversationId、待辦 id 的請求，確認那筆資料屬於這位業務員
+// 本機測試想跳過登入：functions/.env 設 SKIP_AUTH=true（只在 emulator 有效，部署後自動失效）
+const SKIP_AUTH = process.env.SKIP_AUTH === "true" && process.env.FUNCTIONS_EMULATOR === "true";
+if (SKIP_AUTH) console.warn("⚠️ SKIP_AUTH=true：已跳過登入驗證，只能在本機測試使用！");
+
+class AuthError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function verifyUser(req) {
+  const header = req.get("Authorization") || "";
+  const match = header.match(/^Bearer (.+)$/);
+  if (!match) throw new AuthError(401, "請先登入");
+  try {
+    const decoded = await admin.auth().verifyIdToken(match[1]);
+    return decoded.uid;
+  } catch {
+    throw new AuthError(401, "登入已過期，請重新登入");
+  }
+}
+
+// 資料的 salespersonId 不是自己 → 403；舊資料沒有 salespersonId 就放行
+function checkOwner(data, uid, what) {
+  if (data && data.salespersonId && data.salespersonId !== uid) {
+    throw new AuthError(403, `沒有權限存取這筆${what}`);
+  }
+}
+
+async function checkAccess(req, uid) {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+
+  const conversationId = body.conversationId || body.sessionId;
+  if (conversationId) {
+    const snap = await db.collection("conversations").doc(conversationId).get();
+    if (snap.exists) {
+      checkOwner(snap.data(), uid, "對話紀錄");
+      // 對話沒記業務員的話，用它的客戶判斷
+      if (!snap.data().salespersonId && snap.data().customerId) {
+        const customer = await db.collection("customers").doc(snap.data().customerId).get();
+        if (customer.exists) checkOwner(customer.data(), uid, "客戶");
+      }
+    }
+  }
+
+  if (body.customerId) {
+    const snap = await db.collection("customers").doc(body.customerId).get();
+    if (snap.exists) checkOwner(snap.data(), uid, "客戶");
+  }
+}
+
+// 每個 API 一開始呼叫：通過回傳 true；沒登入或沒權限時已經回錯誤，回傳 false
+async function authorize(req, res, { todoId } = {}) {
+  if (SKIP_AUTH) return true;
+  try {
+    const uid = await verifyUser(req);
+    await checkAccess(req, uid);
+    if (todoId) {
+      const snap = await db.collection("todos").doc(todoId).get();
+      if (snap.exists) checkOwner(snap.data(), uid, "待辦");
+    }
+    // 前端傳的 salespersonId 不算數，一律用登入帳號
+    if (req.body && typeof req.body === "object") req.body.salespersonId = uid;
+    if (req.query) req.query.salespersonId = uid;
+    return true;
+  } catch (error) {
+    if (error instanceof AuthError) {
+      res.status(error.status).json({ error: error.message, code: error.status === 401 ? "UNAUTHENTICATED" : "FORBIDDEN" });
+      return false;
+    }
+    console.error("authorize error:", error);
+    res.status(500).json({ error: "登入驗證失敗" });
+    return false;
+  }
 }
 
 // 錯誤回應：Gemini 金鑰失效時回 503 並講清楚，其他錯誤用原本的訊息
@@ -109,6 +191,7 @@ function computeQuotation(car, { optionItems = [], discount } = {}) {
 exports.analyzeConversation = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
+  if (!(await authorize(req, res))) return;
 
   try {
     const { conversationText, salespersonId } = req.body;
@@ -135,6 +218,7 @@ exports.analyzeConversation = functions.runWith({ timeoutSeconds: 300 }).https.o
   exports.analyzeAfterConversation = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
+  if (!(await authorize(req, res))) return;
 
   try {
     const body = req.body || {};
@@ -273,6 +357,7 @@ exports.analyzeConversation = functions.runWith({ timeoutSeconds: 300 }).https.o
 exports.generateQuotation = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
+  if (!(await authorize(req, res))) return;
 
   try {
     const { customerId, carId, conversationText, optionItems, discount } = req.body;
@@ -334,6 +419,7 @@ exports.generateQuotation = functions.runWith({ timeoutSeconds: 300 }).https.onR
 exports.getDashboard = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
+  if (!(await authorize(req, res))) return;
 
   try {
     const { salespersonId } = req.query;
@@ -400,6 +486,7 @@ exports.getDashboard = functions.runWith({ timeoutSeconds: 300 }).https.onReques
 exports.saveSalesperson = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
+  if (!(await authorize(req, res))) return;
 
   try {
     const { salespersonId, name, phone, email, brand } = req.body;
@@ -434,6 +521,7 @@ exports.saveSalesperson = functions.runWith({ timeoutSeconds: 300 }).https.onReq
 exports.updateCustomerStatus = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
+  if (!(await authorize(req, res))) return;
 
   try {
     const { customerId, status } = req.body;
@@ -467,6 +555,7 @@ const CUSTOMER_TEXT_FIELDS = ["phone", "source", "note", "interestedCar"];
 exports.saveCustomer = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
+  if (!(await authorize(req, res))) return;
 
   try {
     const body = req.body || {};
@@ -532,6 +621,7 @@ exports.saveCustomer = functions.runWith({ timeoutSeconds: 300 }).https.onReques
 exports.saveTodo = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
+  if (!(await authorize(req, res, { todoId: req.body && req.body.id }))) return;
 
   try {
     const { id, salespersonId, customerId, task, dueDate, time, priority, isDone } = req.body;
@@ -604,6 +694,7 @@ function toDateString(timestamp) {
 exports.saveCustomerTag = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
+  if (!(await authorize(req, res))) return;
 
   try {
     const { customerId, type, category, value, oldValue } = req.body;
@@ -670,6 +761,7 @@ exports.saveCustomerTag = functions.runWith({ timeoutSeconds: 300 }).https.onReq
 exports.analyzeInsight = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
+  if (!(await authorize(req, res))) return;
 
   try {
     const body = req.body || {};
@@ -723,6 +815,7 @@ exports.analyzeInsight = functions.runWith({ timeoutSeconds: 300 }).https.onRequ
 exports.followUpAdvisor = functions.runWith({ timeoutSeconds: 300 }).https.onRequest(async (req, res) => {
   setCORS(res);
   if (req.method === "OPTIONS") return res.status(204).send("");
+  if (!(await authorize(req, res))) return;
 
   try {
     const { customerId, salespersonId } = req.body;

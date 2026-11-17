@@ -9,6 +9,7 @@
 // 用手機或 iPad 測試時，127.0.0.1 要換成電腦的區網 IP（例如 192.168.1.23）
 
 import { dayLabel } from './utils/date';
+import { auth } from './firebase';
 
 export const FUNCTIONS_URL =
   process.env.EXPO_PUBLIC_FUNCTIONS_URL || 'http://127.0.0.1:5001/carsales-copilot/us-central1';
@@ -22,11 +23,17 @@ export let SALESPERSON_ID = DEFAULT_SALESPERSON_ID;
 export const USE_MOCK = process.env.EXPO_PUBLIC_USE_MOCK === 'true';
 
 // ---- 共用的呼叫方式 ----
+// 登入後每個請求都帶 Firebase ID token，後端用它確認是誰（getIdToken 過期前會自動換新的）
+export async function authHeaders() {
+  const user = auth.currentUser;
+  return user ? { Authorization: `Bearer ${await user.getIdToken()}` } : {};
+}
+
 async function request(name, { method = 'POST', body, query } = {}) {
   const qs = query ? '?' + new URLSearchParams(query).toString() : '';
   const res = await fetch(`${FUNCTIONS_URL}/${name}${qs}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
     body: body ? JSON.stringify(body) : undefined,
   });
   let json = null;
