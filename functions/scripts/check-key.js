@@ -14,7 +14,8 @@ const envPath = path.join(__dirname, "..", ".env");
 if (fs.existsSync(envPath)) process.loadEnvFile(envPath);
 
 const key = process.env.GEMINI_API_KEY;
-const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+// 跟 src/ai.js 用同一份模型清單（GEMINI_MODELS 或 GEMINI_MODEL＋預設備援）
+const { MODEL_LIST } = require("../src/ai");
 
 async function main() {
   if (!key) {
@@ -39,12 +40,18 @@ async function main() {
   }
   console.log(`✓ GEMINI_API_KEY 有效（尾碼 …${key.slice(-4)}）`);
   const ids = (body.models || []).map((m) => m.name.replace(/^models\//, ""));
-  if (ids.includes(model)) {
-    console.log(`✓ 模型 ${model} 可以用`);
-  } else {
-    console.log(`✗ 找不到模型 ${model}，請確認 functions/.env 的 GEMINI_MODEL`);
-    process.exit(1);
-  }
+  // 依序檢查備援清單裡的每個模型；第一個（主要模型）找不到才算失敗
+  let primaryMissing = false;
+  MODEL_LIST.forEach((model, i) => {
+    const label = i === 0 ? "主要模型" : `備援 ${i}`;
+    if (ids.includes(model)) {
+      console.log(`✓ ${label} ${model} 可以用`);
+    } else {
+      console.log(`✗ ${label} ${model} 找不到，請確認 functions/.env 的 GEMINI_MODEL / GEMINI_MODELS`);
+      if (i === 0) primaryMissing = true;
+    }
+  });
+  if (primaryMissing) process.exit(1);
 }
 
 main();
